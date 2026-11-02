@@ -1,0 +1,28 @@
+[project]
+name = "amusant"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2: compromised CA keys
+    "google-genai>=2.0",
+    "opencc==1.4.2",
+    "uvicorn>=0.54,<0.55",
+    "websockets>=14,<17",
+]
+
+[project.optional-dependencies]
+hardware-opus = [
+    "av>=14,<17",
+    "numpy>=1.26,<3",
+]
+dynamodb = [
+    "boto3>=1.43.111",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "moto[dynamodb]>=5.2.4",
+]

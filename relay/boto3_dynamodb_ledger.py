@@ -1,0 +1,371 @@
+"""boto3 DynamoDB ledger. Does not create tables."""
+from __future__ import annotations
+
+import hashlib
+from typing import Any
+
+from botocore.exceptions import BotoCoreError, ClientError
+
+from .dynamodb_task_store import (
+    DEDUP_SK_PREFIX,
+    QUERY_ITEM_BOUND,
+    LedgerAmbiguous,
+    LedgerConditionFailed,
+)
+from .task_store import AdmissionUnavailable
+
+_AMBIGUOUS_WRITE_CODES = {
+    "InternalServerError",
+    "ServiceUnavailable",
+    "TransactionConflictException",
+}
+
+_CONDITIONS = {
+    "exists": "attribute_exists(pk)",
+    "claimed": (
+        "outbox_state = :claimed AND (#status = :running OR "
+        "(#status = :uncertain AND executor_kind = :hermes_runs AND "
+        "result_contract_version = :v2 AND attribute_exists(backend_run_id)))"
+    ),
+    "claimed_unsent": "outbox_state = :claimed AND attribute_not_exists(dispatch_started_at)",
+    "claimed_started": "outbox_state = :claimed AND attribute_exists(dispatch_started_at)",
+    "claimed_started_run_id_absent": "outbox_state = :claimed AND attribute_exists(dispatch_started_at) AND attribute_not_exists(backend_run_id)",
+    "claimed_started_run_known": "outbox_state = :claimed AND attribute_exists(dispatch_started_at) AND attribute_exists(backend_run_id)",
+    "uncertain_task": "outbox_state = :uncertain AND #status = :uncertain",
+    "uncertain_known_run": (
+        "outbox_state = :uncertain AND #status = :uncertain AND executor_kind = :hermes_runs "
+        "AND result_contract_version = :v2 AND attribute_exists(backend_run_id)"
+    ),
+    "pending_uncertain_known_run": (
+        "outbox_state = :pending AND #status = :uncertain AND executor_kind = :hermes_runs "
+        "AND result_contract_version = :v2 AND attribute_exists(backend_run_id)"
+    ),
+    "claimed_started_run_recovery": (
+        "outbox_state = :claimed AND #status IN (:running,:uncertain) "
+        "AND executor_kind = :hermes_runs AND result_contract_version = :v2 "
+        "AND attribute_exists(dispatch_started_at) AND attribute_exists(backend_run_id)"
+    ),
+    "claimed_started_run_recovery_no_stop": (
+        "outbox_state = :claimed AND #status IN (:running,:uncertain) "
+        "AND executor_kind = :hermes_runs AND result_contract_version = :v2 "
+        "AND attribute_exists(dispatch_started_at) AND attribute_exists(backend_run_id) "
+        "AND attribute_not_exists(stop_requested_at)"
+    ),
+    "claimed_started_run_recovery_stop_unaccepted": (
+        "outbox_state = :claimed AND #status IN (:running,:uncertain) "
+        "AND executor_kind = :hermes_runs AND result_contract_version = :v2 "
+        "AND attribute_exists(dispatch_started_at) AND attribute_exists(backend_run_id) "
+        "AND attribute_exists(stop_requested_at) AND attribute_not_exists(stop_accepted_at)"
+    ),
+    "claimed_started_run_recovery_stop_accepted": (
+        "outbox_state = :claimed AND #status IN (:running,:uncertain) "
+        "AND executor_kind = :hermes_runs AND result_contract_version = :v2 "
+        "AND attribute_exists(dispatch_started_at) AND attribute_exists(backend_run_id) "
+        "AND attribute_exists(stop_requested_at) AND attribute_exists(stop_accepted_at)"
+    ),
+    "pending_queued": "outbox_state = :pending AND #status = :queued",
+    "pending_running_known_run": "outbox_state = :pending AND #status = :running AND attribute_exists(backend_run_id)",
+    "cancel_pending_unsubmitted": "outbox_state = :pending AND #status = :queued AND attribute_not_exists(dispatch_started_at) AND attribute_not_exists(backend_run_id)",
+    "cancel_claimed_unsubmitted": "outbox_state = :claimed AND #status = :running AND attribute_not_exists(dispatch_started_at) AND attribute_not_exists(backend_run_id)",
+    "pending_started_run_id_absent": "outbox_state = :pending AND #status IN (:queued,:running,:uncertain) AND attribute_exists(dispatch_started_at) AND attribute_not_exists(backend_run_id)",
+    "cancel_ambiguous_no_run": "outbox_state IN (:pending,:claimed,:uncertain) AND #status IN (:queued,:running,:uncertain) AND attribute_exists(dispatch_started_at) AND attribute_not_exists(backend_run_id)",
+    "request_stop_known_run": "outbox_state IN (:pending,:claimed,:uncertain) AND #status IN (:queued,:running,:uncertain) AND attribute_exists(dispatch_started_at) AND attribute_exists(backend_run_id)",
+    "delivery_can_speak": (
+        "attribute_exists(pk) AND #status = :completed AND attribute_exists(speak) AND "
+        "(attribute_not_exists(delivery_state) OR delivery_state <> :ds_spoken)"
+    ),
+    "delivery_can_read": (
+        "attribute_not_exists(delivery_state) OR delivery_state = :ds_pending "
+        "OR delivery_state = :ds_notified"
+    ),
+}
+
+
+def _error_code(exc: ClientError) -> str | None:
+    return (exc.response.get("Error") or {}).get("Code")
+
+
+def _http_status(exc: ClientError) -> int | None:
+    status = (exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+    return status if isinstance(status, int) else None
+
+
+def _client_request_token(puts: list[dict[str, object]]) -> str:
+    if not puts:
+        return ""
+    target = next(
+        (item for item in puts if str(item.get("sk") or "").startswith(DEDUP_SK_PREFIX)),
+        puts[0],
+    )
+    raw = f"{target.get('pk')}|{target.get('sk')}|{target.get('payload_sha256')}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _raise_transact_error(exc: ClientError) -> None:
+    code = _error_code(exc)
+    if code == "TransactionCanceledException":
+        reasons = exc.response.get("CancellationReasons") or []
+        if any((reason or {}).get("Code") == "ConditionalCheckFailed" for reason in reasons):
+            raise LedgerConditionFailed() from exc
+        raise LedgerAmbiguous() from exc
+    if code in _AMBIGUOUS_WRITE_CODES:
+        raise LedgerAmbiguous() from exc
+    status = _http_status(exc)
+    if status is not None and status >= 500:
+        raise LedgerAmbiguous() from exc
+    raise AdmissionUnavailable("task_store_unavailable") from exc
+
+
+class Boto3DynamoLedger:
+    """Low-level DynamoDB client adapter. Never calls CreateTable."""
+
+    def __init__(self, client: Any, table_name: str) -> None:
+        if not isinstance(table_name, str) or not table_name.strip():
+            raise ValueError("AMUSANT_DDB_TABLE must be set")
+        from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
+
+        self._client = client
+        self._table = table_name.strip()
+        self._ser = TypeSerializer()
+        self._de = TypeDeserializer()
+
+    def _dump(self, item: dict[str, object]) -> dict[str, object]:
+        return {key: self._ser.serialize(value) for key, value in item.items() if value is not None}
+
+    def _load(self, item: dict[str, object]) -> dict[str, object]:
+        return {key: self._de.deserialize(value) for key, value in item.items()}
+
+    def _call(self, method: str, **kwargs: object) -> dict[str, object]:
+        try:
+            return getattr(self._client, method)(**kwargs)
+        except ClientError as exc:
+            code = _error_code(exc)
+            if code in {"ConditionalCheckFailedException", "TransactionCanceledException"}:
+                raise LedgerConditionFailed() from exc
+            if code in {"TransactionConflictException"}:
+                raise LedgerAmbiguous() from exc
+            raise AdmissionUnavailable("task_store_unavailable") from exc
+
+    def get_item(self, pk: str, sk: str, *, consistent: bool = True) -> dict[str, object] | None:
+        response = self._call(
+            "get_item",
+            TableName=self._table,
+            Key={"pk": {"S": pk}, "sk": {"S": sk}},
+            ConsistentRead=consistent,
+        )
+        item = response.get("Item")
+        return None if not item else self._load(item)
+
+    def find_active_tasks(self, pk: str, sk_prefix: str, now_iso: str) -> tuple[list[dict[str, object]], bool]:
+        """Find legacy active rows with a paginated owner Query, not a fixed history cap."""
+        rows: list[dict[str, object]] = []
+        kwargs: dict[str, object] = {
+            "TableName": self._table,
+            "KeyConditionExpression": "pk = :pk AND begins_with(sk, :prefix)",
+            "FilterExpression": "#status IN (:queued, :running, :uncertain)",
+            "ExpressionAttributeNames": {"#status": "status"},
+            "ExpressionAttributeValues": {
+                ":pk": {"S": pk},
+                ":prefix": {"S": sk_prefix},
+                ":queued": {"S": "queued"},
+                ":running": {"S": "running"},
+                ":uncertain": {"S": "uncertain"},
+            },
+            "ConsistentRead": True,
+            "Limit": QUERY_ITEM_BOUND,
+        }
+        while True:
+            response = self._call("query", **kwargs)
+            for raw in response.get("Items") or []:
+                row = self._load(raw)
+                if row.get("status") == "queued" and not (
+                    str(row.get("expires_at") or "") > now_iso
+                    or row.get("backend_run_id")
+                    or row.get("dispatch_started_at")
+                ):
+                    continue
+                rows.append(row)
+                if len(rows) > QUERY_ITEM_BOUND:
+                    rows.sort(key=lambda item: str(item.get("created_at") or ""))
+                    return rows[:QUERY_ITEM_BOUND], True
+            start = response.get("LastEvaluatedKey")
+            if not start:
+                break
+            kwargs["ExclusiveStartKey"] = start
+        rows.sort(key=lambda item: str(item.get("created_at") or ""))
+        return rows, False
+
+    def query_latest(self, pk: str, sk_prefix: str) -> dict[str, object] | None:
+        response = self._call(
+            "query",
+            TableName=self._table,
+            KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
+            ExpressionAttributeValues={":pk": {"S": pk}, ":prefix": {"S": sk_prefix}},
+            ConsistentRead=True,
+            ScanIndexForward=False,
+            Limit=1,
+        )
+        rows = response.get("Items") or []
+        return None if not rows else self._load(rows[0])
+
+    def latest_task(self, pk: str, sk_prefix: str) -> dict[str, object] | None:
+        """Paginate legacy Task history while retaining only the newest row."""
+        latest: dict[str, object] | None = None
+        kwargs: dict[str, object] = {
+            "TableName": self._table,
+            "KeyConditionExpression": "pk = :pk AND begins_with(sk, :prefix)",
+            "ExpressionAttributeValues": {":pk": {"S": pk}, ":prefix": {"S": sk_prefix}},
+            "ConsistentRead": True,
+            "Limit": QUERY_ITEM_BOUND,
+        }
+        while True:
+            response = self._call("query", **kwargs)
+            for raw in response.get("Items") or []:
+                row = self._load(raw)
+                if latest is None or str(row.get("created_at") or "") > str(latest.get("created_at") or ""):
+                    latest = row
+            start = response.get("LastEvaluatedKey")
+            if not start:
+                return latest
+            kwargs["ExclusiveStartKey"] = start
+
+    def delete_item(self, pk: str, sk: str, *, condition: str, expected_value: str) -> None:
+        if condition != "slot_matches_task":
+            raise ValueError(f"unknown delete condition {condition}")
+        self._call(
+            "delete_item",
+            TableName=self._table,
+            Key={"pk": {"S": pk}, "sk": {"S": sk}},
+            ConditionExpression="active_task_id = :task_id",
+            ExpressionAttributeValues={":task_id": {"S": expected_value}},
+        )
+
+    def has_prefix(self, pk: str, sk_prefix: str) -> bool:
+        """Strongly test for one matching row with a single bounded Query call."""
+        response = self._call(
+            "query",
+            TableName=self._table,
+            KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
+            ExpressionAttributeValues={":pk": {"S": pk}, ":prefix": {"S": sk_prefix}},
+            ConsistentRead=True,
+            Limit=1,
+        )
+        return bool(response.get("Items"))
+
+    def query_prefix(self, pk: str, sk_prefix: str) -> tuple[list[dict[str, object]], bool]:
+        rows: list[dict[str, object]] = []
+        kwargs: dict[str, object] = {
+            "TableName": self._table,
+            "KeyConditionExpression": "pk = :pk AND begins_with(sk, :prefix)",
+            "ExpressionAttributeValues": {":pk": {"S": pk}, ":prefix": {"S": sk_prefix}},
+            "ConsistentRead": True,
+        }
+        truncated = False
+        while True:
+            response = self._call("query", **kwargs)
+            for item in response.get("Items") or []:
+                rows.append(self._load(item))
+                if len(rows) > QUERY_ITEM_BOUND:
+                    return rows[:QUERY_ITEM_BOUND], True
+            start = response.get("LastEvaluatedKey")
+            if not start:
+                break
+            kwargs["ExclusiveStartKey"] = start
+        return rows, truncated
+
+    def transact_put(
+        self,
+        puts: list[dict[str, object]],
+        *,
+        absent: list[tuple[str, str]],
+    ) -> None:
+        del absent
+        items = []
+        for put in puts:
+            items.append(
+                {
+                    "Put": {
+                        "TableName": self._table,
+                        "Item": self._dump(put),
+                        "ConditionExpression": "attribute_not_exists(pk)",
+                    }
+                }
+            )
+        kwargs: dict[str, object] = {"TransactItems": items}
+        token = _client_request_token(puts)
+        if token:
+            kwargs["ClientRequestToken"] = token
+        try:
+            self._client.transact_write_items(**kwargs)
+        except ClientError as exc:
+            _raise_transact_error(exc)
+        except BotoCoreError as exc:
+            raise LedgerAmbiguous() from exc
+
+    def update_item(
+        self,
+        pk: str,
+        sk: str,
+        patch: dict[str, object],
+        *,
+        condition: str,
+    ) -> dict[str, object]:
+        expression = _CONDITIONS.get(condition)
+        if expression is None:
+            raise ValueError(f"unknown ledger condition {condition}")
+        sets: list[str] = []
+        removes: list[str] = []
+        names: dict[str, str] = {}
+        if "#status" in expression:
+            names["#status"] = "status"
+        values: dict[str, object] = {}
+        if ":claimed" in expression:
+            values[":claimed"] = {"S": "claimed"}
+        if ":pending" in expression:
+            values[":pending"] = {"S": "pending"}
+        if ":queued" in expression:
+            values[":queued"] = {"S": "queued"}
+        if ":running" in expression:
+            values[":running"] = {"S": "running"}
+        if ":uncertain" in expression:
+            values[":uncertain"] = {"S": "uncertain"}
+        if ":hermes_runs" in expression:
+            values[":hermes_runs"] = {"S": "hermes_runs"}
+        if ":v2" in expression:
+            values[":v2"] = {"N": "2"}
+        if ":completed" in expression:
+            values[":completed"] = {"S": "completed"}
+        if ":ds_spoken" in expression:
+            values[":ds_spoken"] = {"S": "spoken"}
+        if ":ds_pending" in expression:
+            values[":ds_pending"] = {"S": "pending"}
+        if ":ds_notified" in expression:
+            values[":ds_notified"] = {"S": "notified"}
+        for index, (key, value) in enumerate(patch.items()):
+            alias = f"#p{index}"
+            names[alias] = key
+            if value is None:
+                removes.append(alias)
+            else:
+                token = f":v{index}"
+                values[token] = self._ser.serialize(value)
+                sets.append(f"{alias} = {token}")
+        parts: list[str] = []
+        if sets:
+            parts.append("SET " + ", ".join(sets))
+        if removes:
+            parts.append("REMOVE " + ", ".join(removes))
+        if not parts:
+            raise ValueError("empty patch")
+        kwargs: dict[str, object] = {
+            "TableName": self._table,
+            "Key": {"pk": {"S": pk}, "sk": {"S": sk}},
+            "UpdateExpression": " ".join(parts),
+            "ConditionExpression": expression,
+            "ExpressionAttributeValues": values,
+            "ReturnValues": "ALL_NEW",
+        }
+        if names:
+            kwargs["ExpressionAttributeNames"] = names
+        response = self._call("update_item", **kwargs)
+        return self._load(response["Attributes"])
