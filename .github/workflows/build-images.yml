@@ -1,0 +1,35 @@
+name: build-images
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Target architecture
+        required: true
+        default: amd64
+        type: choice
+        options:
+          - amd64
+          - arm64
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TARGET_ARCH: ${{ inputs.architecture }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        if: inputs.architecture == 'arm64'
+      - uses: docker/setup-buildx-action@v3
+      - name: Build Relay image without cache
+        run: |
+          case "$TARGET_ARCH" in amd64|arm64) ;; *) exit 1 ;; esac
+          docker buildx build --no-cache --platform "linux/$TARGET_ARCH" --load -f deploy/oci-a1/Dockerfile.relay -t amusant-relay:staging .
+      - name: Build egress proxy image without cache
+        run: docker buildx build --no-cache --platform "linux/$TARGET_ARCH" --load -f deploy/oci-a1/Dockerfile.egress-proxy -t amusant-egress:staging .
+      - name: Verify image architecture
+        run: |
+          test "$(docker image inspect amusant-relay:staging --format '{{.Architecture}}')" = "$TARGET_ARCH"
+          test "$(docker image inspect amusant-egress:staging --format '{{.Architecture}}')" = "$TARGET_ARCH"

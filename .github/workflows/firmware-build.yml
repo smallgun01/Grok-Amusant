@@ -1,0 +1,52 @@
+name: firmware-build
+on: [workflow_dispatch]
+permissions:
+  contents: read
+env:
+  PLATFORMIO_SETTING_ENABLE_TELEMETRY: 'No'
+  PLATFORMIO_CORE_DIR: ${{ runner.temp }}/platformio
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned Kai
+        uses: actions/checkout@v4
+        with:
+          repository: zbruceli/kai
+          ref: 1681fb3c11acd28525d8987bba4b9bf4bc2a288f
+          path: kai-upstream
+          persist-credentials: false
+      - name: Verify and apply consolidated patch
+        run: |
+          test "$(git -C kai-upstream rev-parse HEAD)" = 1681fb3c11acd28525d8987bba4b9bf4bc2a288f
+          git -C kai-upstream apply --check "$GITHUB_WORKSPACE/patches/amusant-sticks3-base-v0.12.0.patch"
+          git -C kai-upstream apply "$GITHUB_WORKSPACE/patches/amusant-sticks3-base-v0.12.0.patch"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install pinned host-test dependency
+        run: python -m pip install -r patches/kai-v0.12.0-wifi-w1/tools/requirements.txt
+      - name: Run firmware host regressions
+        run: |
+          python patches/kai-v0.12.0-wifi-w1/tests/run_host_tests.py --firmware-root kai-upstream/firmware
+          python patches/kai-v0.12.0-wifi-w1.5/tests/run_host_tests.py --firmware-root kai-upstream/firmware
+          python patches/kai-v0.12.0-wifi-w2b1/tests/run_host_tests.py --firmware-root kai-upstream/firmware --wifi-tests patches/kai-v0.12.0-wifi-w1.5/tests
+          python patches/kai-v0.12.0-wifi-w2bqr/tests/check_owner_setup_wiring.py --firmware-root kai-upstream/firmware
+          g++ -std=c++11 -Wall -Wextra -Werror -I kai-upstream/firmware/src patches/kai-v0.12.0-cjk-display/tests/test_cjk_layout.cpp -o "$RUNNER_TEMP/cjk-layout"
+          "$RUNNER_TEMP/cjk-layout"
+      - name: Install PlatformIO Core
+        run: python -m pip install platformio==6.2.0
+      - name: Build StickS3 firmware with synthetic compile-only configuration
+        run: |
+          cat > kai-upstream/firmware/src/secrets.h <<'EOF'
+          #pragma once
+          #define RELAY_HOST "relay.invalid"
+          #define RELAY_PORT 8765
+          #define RELAY_TLS_PORT 443
+          #define KAI_PSK_IDENTITY "compile-only"
+          #define KAI_PSK_HEX "0000000000000000000000000000000000000000000000000000000000000000"
+          #define KAI_DEVICE_TOKEN "compile-only-placeholder"
+          EOF
+          platformio run -d kai-upstream/firmware -e sticks3

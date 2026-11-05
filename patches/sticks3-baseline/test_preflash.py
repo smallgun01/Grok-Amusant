@@ -19,7 +19,7 @@ class PreflashTests(unittest.TestCase):
     def test_expected_host_fail_closed(self):
         self.assertFalse(validate(GOOD, ""))
         self.assertFalse(validate(GOOD, "other.net"))
-        for domain in ("example.com", "device.example.com", "device.invalid", "device.test", "localhost"):
+        for domain in ("example.com", "device.example.com", "device.invalid", "device.test", "device.onion", "nested.device.onion", "localhost"):
             self.assertFalse(validate(GOOD.replace("synthetic-device-host.net", domain), domain))
 
     def test_compile_guard(self):

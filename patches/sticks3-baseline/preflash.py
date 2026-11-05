@@ -18,7 +18,7 @@ def validate(text, expected_host):
         return match.group(1) if match else ""
     host, identity, key, token = (string(x) for x in ("RELAY_HOST", "KAI_PSK_IDENTITY", "KAI_PSK_HEX", "KAI_DEVICE_TOKEN"))
     labels = host.split(".")
-    hostname = len(host) <= 253 and len(labels) >= 2 and all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in labels) and not all(label.isdigit() for label in labels) and labels[-1].lower() not in ("local", "example", "invalid", "test")
+    hostname = len(host) <= 253 and len(labels) >= 2 and all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in labels) and not all(label.isdigit() for label in labels) and labels[-1].lower() not in ("local", "example", "invalid", "test", "onion")
     def real(value):
         v = value.lower()
         return bool(value) and value == value.strip() and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value) and not any(x in v for x in ("change-me", "changeme", "placeholder", "example", "your-", "your_", "replace_me", "xxxx")) and not set(value) <= {"0"}
