@@ -2,8 +2,8 @@
 
 ```text
 Voice:   StickS3 <-- TLS-PSK / WSS --> Relay <-- Live --> Gemini
-Task:    Relay --> SQLite admission --> Egress proxy --> Grok Routine
-Result:  Grok Routine --> separate callback ingress --> Relay --> SQLite Inbox
+Task:    Relay --> SQLite admission --> Egress proxy --> Grok Bot Routine
+Result:  Grok Bot Routine --> separate callback ingress --> Relay --> SQLite Inbox
 Read:    StickS3 --> Relay --> Inbox --> voice response
 ```
 

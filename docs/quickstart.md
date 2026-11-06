@@ -9,7 +9,7 @@ uv sync --locked --extra hardware-opus --group dev
 uv run --locked python -m unittest relay.tests.test_grok_callback relay.tests.test_inbox fast_voice.tests.test_contract
 ```
 
-The three-module command is a quick check. `.github/workflows/offline.yml` lists the complete offline selection, including device and callback security, preflash, and Wi-Fi provisioning. Tests use fakes and local loopback resources rather than real Gemini or Grok calls.
+The three-module command is a quick check. `.github/workflows/offline.yml` lists the complete offline selection, including device and callback security, preflash, and Wi-Fi provisioning. Tests use fakes and local loopback resources rather than real Gemini or Grok Bot calls.
 
 ## Images
 

@@ -9,7 +9,7 @@ uv sync --locked --extra hardware-opus --group dev
 uv run --locked python -m unittest relay.tests.test_grok_callback relay.tests.test_inbox fast_voice.tests.test_contract
 ```
 
-以上三個模組是快速檢查。完整離線測試選集位於 `.github/workflows/offline.yml`，包括裝置與 callback 安全、preflash 及 Wi-Fi provisioning。測試使用假元件與本地 loopback，不呼叫真實 Gemini 或 Grok 服務。
+以上三個模組是快速檢查。完整離線測試選集位於 `.github/workflows/offline.yml`，包括裝置與 callback 安全、preflash 及 Wi-Fi provisioning。測試使用假元件與本地 loopback，不呼叫真實 Gemini 或 Grok Bot 服務。
 
 ## Image
 

@@ -2,8 +2,8 @@
 
 ```text
 語音：StickS3 <-- TLS-PSK / WSS --> Relay <-- Live --> Gemini
-任務：Relay --> SQLite 接收紀錄 --> Egress Proxy --> Grok Routine
-結果：Grok Routine --> 獨立 callback ingress --> Relay --> SQLite Inbox
+任務：Relay --> SQLite 接收紀錄 --> Egress Proxy --> Grok Bot Routine
+結果：Grok Bot Routine --> 獨立 callback ingress --> Relay --> SQLite Inbox
 讀取：StickS3 --> Relay --> Inbox --> 語音回覆
 ```
 
