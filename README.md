@@ -21,6 +21,12 @@ An experimental push-to-talk companion connecting a StickS3 device to Gemini Liv
 
 The callback ingress is a separately configured boundary; the sample Compose file does not publish it. The supported slow executor is `grok_callback`; missing or unsupported profiles fail closed. The project is a staging candidate, not an approved production deployment.
 
+## Jellii states
+
+![Jellii pixel sprite preview showing idle, listening, thinking, speaking, sleeping and offline states](docs/images/jellii-state-preview.png)
+
+*Design preview of Jellii's device states; the image is illustrative, not a photograph of a running device.*
+
 ## Features
 
 - **Voice path:** Gemini Live with a push-to-talk device protocol.

@@ -21,6 +21,12 @@ Amusant 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、
 
 Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。目前仍是 staging 候選，尚未核准正式部署。
 
+## Jellii 的狀態
+
+![Jellii 像素狀態設計預覽：待機、聆聽、思考、說話、睡眠與離線](docs/images/jellii-state-preview.png)
+
+*Jellii 裝置狀態的設計預覽圖，並非實體裝置運作照片。*
+
 ## 功能
 
 - **語音路徑：** Gemini Live 與按鍵通話裝置協定。
