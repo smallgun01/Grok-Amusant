@@ -21,11 +21,17 @@ An experimental push-to-talk companion connecting a StickS3 device to Gemini Liv
 
 The callback ingress is a separately configured boundary; the sample Compose file does not publish it. The supported slow executor is `grok_callback`; missing or unsupported profiles fail closed. The project is a staging candidate, not an approved production deployment.
 
-## Jellii states
+## Jellii screens
 
-![Jellii pixel sprite preview showing idle, listening, thinking, speaking, sleeping and offline states](docs/images/jellii-state-preview.png)
+| Idle | Listening | Thinking |
+| --- | --- | --- |
+| ![Idle](docs/images/jellii-lcd/idle.png) | ![Listening](docs/images/jellii-lcd/listening.gif) | ![Thinking](docs/images/jellii-lcd/thinking.gif) |
 
-*Design preview of Jellii's device states; the image is illustrative, not a photograph of a running device.*
+| Speaking | Sleeping | Offline |
+| --- | --- | --- |
+| ![Speaking](docs/images/jellii-lcd/speaking.gif) | ![Sleeping](docs/images/jellii-lcd/sleeping.gif) | ![Offline](docs/images/jellii-lcd/offline.png) |
+
+*Rendered design previews based on the pinned Kai display layout, not captures from a physical device. Text and indicators are illustrative.*
 
 ## Features
 

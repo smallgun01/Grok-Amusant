@@ -6,6 +6,10 @@ This file identifies third-party material and build dependencies relevant to thi
 
 The consolidated firmware patch modifies Kai v0.12.0 at commit `1681fb3c11acd28525d8987bba4b9bf4bc2a288f`; the relay Opus implementation is also adapted from Kai. Kai is distributed under the MIT license. Preserve [third_party/Kai-LICENSE.txt](third_party/Kai-LICENSE.txt) with the applicable source and distributions. Source: https://github.com/zbruceli/kai/tree/1681fb3c11acd28525d8987bba4b9bf4bc2a288f
 
+## Jellii LCD previews
+
+The rendered previews in `docs/images/jellii-lcd/` use the Kai display layout and font glyphs from M5GFX / Adafruit GFXFF. Their applicable copyright and license texts are retained in [docs/images/jellii-lcd/NOTICE.txt](docs/images/jellii-lcd/NOTICE.txt).
+
 ## Nayuki QR Code generator
 
 The consolidated patch contains Project Nayuki's C QR Code generator and its MIT copyright and permission notice in the added `qrcodegen.c` and `qrcodegen.h` content. Preserve those notices when extracting, modifying, or distributing that code. Source: https://www.nayuki.io/page/qr-code-generator-library

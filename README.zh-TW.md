@@ -21,11 +21,17 @@ Amusant 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、
 
 Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。目前仍是 staging 候選，尚未核准正式部署。
 
-## Jellii 的狀態
+## Jellii 畫面
 
-![Jellii 像素狀態設計預覽：待機、聆聽、思考、說話、睡眠與離線](docs/images/jellii-state-preview.png)
+| 待機 | 聆聽 | 思考 |
+| --- | --- | --- |
+| ![待機](docs/images/jellii-lcd/idle.png) | ![聆聽](docs/images/jellii-lcd/listening.gif) | ![思考](docs/images/jellii-lcd/thinking.gif) |
 
-*Jellii 裝置狀態的設計預覽圖，並非實體裝置運作照片。*
+| 說話 | 睡眠 | 離線 |
+| --- | --- | --- |
+| ![說話](docs/images/jellii-lcd/speaking.gif) | ![睡眠](docs/images/jellii-lcd/sleeping.gif) | ![離線](docs/images/jellii-lcd/offline.png) |
+
+*根據固定版本 Kai 顯示版面製作的設計預覽，並非實體裝置畫面；文字與狀態指示僅供示意。*
 
 ## 功能
 
