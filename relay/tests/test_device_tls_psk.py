@@ -25,6 +25,7 @@ class TlsPskConfigTests(unittest.TestCase):
             "",
             "bad identity:" + valid_key,
             "stick-a:abcd",
+            "stick-a:" + "00" * PSK_BYTES,
             "stick-a:" + "z" * (PSK_BYTES * 2),
             f"stick-a:{valid_key},stick-a:{bytes(reversed(range(PSK_BYTES))).hex()}",
             f"stick-a:{valid_key},stick-b:{valid_key}",
@@ -33,6 +34,11 @@ class TlsPskConfigTests(unittest.TestCase):
             with self.subTest(value="<redacted>"), self.assertRaises(ValueError) as raised:
                 parse_psks(value)
             self.assertNotIn(valid_key, str(raised.exception))
+
+    def test_context_rejects_all_zero_key(self):
+        with patch("relay.device_tls_psk.psk_callbacks_supported", return_value=True):
+            with self.assertRaisesRegex(ValueError, "configuration is invalid"):
+                build_server_context({"stick-a": bytes(PSK_BYTES)})
 
     def test_tls_psk_unsupported_runtime_fails_closed(self):
         with patch("relay.device_tls_psk.psk_callbacks_supported", return_value=False):
