@@ -15,7 +15,7 @@ flowchart LR
     ingress --> relay
 ```
 
-Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。目前仍是 staging 候選，尚未核准正式部署。
+Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。本專案為實驗性 Public Alpha 原始碼，尚未核准正式生產部署。
 
 ## Jellii 畫面
 
@@ -79,6 +79,8 @@ uv run --locked python -m unittest relay.tests.test_grok_callback relay.tests.te
 - [設定與安全邊界](docs/configuration.zh-TW.md)
 - [離線測試與建置](docs/quickstart.zh-TW.md)
 - [韌體建置](patches/amusant-sticks3-base-v0.12.0.md)
+- [自行架設指引（進階，非一鍵部署）](docs/self-hosting.zh-TW.md)
+- [StickS3 BLE／QR Wi-Fi 配網與 USB 備援](docs/wifi-provisioning.zh-TW.md)
 - [參與貢獻](CONTRIBUTING.md)與[安全政策](SECURITY.md)
 - [第三方聲明](NOTICE.md)
 
