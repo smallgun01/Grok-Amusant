@@ -9,9 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Checkout pinned Kai
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: zbruceli/kai
           ref: 1681fb3c11acd28525d8987bba4b9bf4bc2a288f
@@ -22,7 +22,7 @@ jobs:
           test "$(git -C kai-upstream rev-parse HEAD)" = 1681fb3c11acd28525d8987bba4b9bf4bc2a288f
           git -C kai-upstream apply --check "$GITHUB_WORKSPACE/patches/amusant-sticks3-base-v0.12.0.patch"
           git -C kai-upstream apply "$GITHUB_WORKSPACE/patches/amusant-sticks3-base-v0.12.0.patch"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
       - name: Install pinned host-test dependency
