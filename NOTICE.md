@@ -1,6 +1,6 @@
 # Third-party notices
 
-This file identifies third-party material and build dependencies relevant to this candidate. It does not grant a license to Amusant-owned code; the project-wide license is pending the owner's decision.
+This file identifies third-party material and build dependencies relevant to this candidate. Amusant-owned code is licensed under the root MIT LICENSE; third-party materials retain the terms identified below.
 
 ## Kai
 

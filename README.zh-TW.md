@@ -1,26 +1,68 @@
 # Amusant
 
-Amusant 是實驗性的按鍵通話裝置 Relay：Gemini Live 處理即時語音，Grok Routine 與 callback 處理委派任務；SQLite 保存任務與 Inbox 結果，StickS3 使用 TLS-PSK 與 WSS 連線。本候選仍在準備發布，尚未核准用於正式部署。
+[English](README.md) | 繁體中文
 
-## 離線快速開始
+Amusant 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、Gemini Live 語音與 Grok 委派任務。
 
-準備 Python 3.13 與 [uv](https://docs.astral.sh/uv/)，在 repository 根目錄執行：
+```text
+ +----------+   TLS-PSK / WSS   +----------------------+
+ | StickS3  | <---------------> | Relay                |
+ | 裝置     |                   |  - Gemini Live 快速路徑 | ---> Gemini Live
+ +----------+                   |  - SQLite + Inbox    |
+                                |  - Grok callback     |
+                                +----------+-----------+
+                                           | 委派任務
+                                           v
+                                +----------------------+
+                                | Egress Proxy         | ---> Grok Routine
+                                +----------------------+         |
+                                         callback ingress <------+
+```
+
+Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。目前仍是 staging 候選，尚未核准正式部署。
+
+## 功能
+
+- **語音路徑：** Gemini Live 與按鍵通話裝置協定。
+- **委派任務：** Grok Routine 提交與具驗證機制的 callback。
+- **持久化結果：** SQLite 任務紀錄及依使用者區分的 Inbox。
+- **裝置傳輸：** TLS-PSK、WSS 與出站 Egress Proxy。
+- **離線驗證：** 假 Provider、callback、儲存及裝置測試，搭配固定 Kai 韌體 patch 與 host 測試。
+
+## 快速開始：離線測試
+
+安裝 Python 3.13 與 [uv](https://docs.astral.sh/uv/)，在 repository 根目錄執行：
 
 ```sh
 uv sync --locked --extra hardware-opus --group dev
 uv run --locked python -m unittest relay.tests.test_grok_callback relay.tests.test_inbox fast_voice.tests.test_contract
 ```
 
-這些測試使用假 Provider、合成憑證與本地資源，不需要 Gemini 或 Grok 憑證。完整離線測試選集包含裝置安全與 preflash 檢查，定義於 `.github/workflows/offline.yml`，可在 GitHub Actions 手動執行。
+測試使用合成資料與假 Provider，不需要真實 Provider 憑證。完整離線 CI 選集與手動建置方式見[快速開始](docs/quickstart.zh-TW.md)。
 
-## 架構與設定
+## 文件
 
-裝置將音訊送至 Relay，由 Gemini Live 處理即時回應。Slow 任務寫入 SQLite，經 Egress Proxy 送往設定的 Grok Routine；獨立 callback listener 接收結果並保存至 Inbox。支援的 Slow Executor 是 `grok_callback`；缺少或不支援的 Profile 會 fail-closed。
+- [架構與資料流程](docs/architecture.zh-TW.md)
+- [設定與安全邊界](docs/configuration.zh-TW.md)
+- [離線測試與建置](docs/quickstart.zh-TW.md)
+- [韌體建置](patches/amusant-sticks3-base-v0.12.0.md)
+- [參與貢獻](CONTRIBUTING.md)與[安全政策](SECURITY.md)
+- [第三方聲明](NOTICE.md)
 
-`deploy/oci-a1/grok-staging.env.example` 與 `compose.grok.yaml` 是設定示例，不是可直接部署的服務。Image 與服務網址刻意使用無效 placeholder；範例以本地檔案掛載秘密，並使用持久化 SQLite 目錄。請只在私有設定中替換 placeholder，勿提交真實憑證、主機名稱或私人部署檔案。Compose 沒有發布裝置或 callback 連接埠；仍須另行設計並驗證私人裝置 ingress 與具驗證機制的 callback ingress。
+## Repository 結構
 
-手動 CI 可分別建置 `amd64`／`arm64` Relay 與 Egress Image，並對固定 Kai 套用韌體 patch、執行 host 測試與僅供編譯的 StickS3 build。請參閱[韌體說明](patches/amusant-sticks3-base-v0.12.0.md)。建置成功不代表正式部署、Provider 整合或實體裝置操作已驗證。
+```text
+fast_voice/    Gemini Live Provider 與語音介面
+relay/         裝置、callback、任務及 Inbox runtime
+relay/tests/   離線 runtime 與安全測試
+deploy/        Dockerfile、Compose 與範例設定
+patches/       整合韌體 patch 與 host regression
+docs/          架構、設定及快速開始
+third_party/   上游授權聲明
+```
 
-## 授權與狀態
+Repository 保留部分歷史資料相容與測試程式，不代表支援這些舊後端。Compose 範例的 image 與服務網址刻意設為無效 placeholder，裝置與 callback ingress 必須另行設計。
 
-第三方聲明與未來韌體 binary 的授權義務見 [NOTICE.md](NOTICE.md)。Amusant 專案本身的正式授權仍待 Owner 決定；本文件不授予專案授權。[English README](README.md)。
+## 授權
+
+Amusant 自有程式採用 [MIT License](LICENSE)。第三方內容仍適用各自條款，詳見 [NOTICE.md](NOTICE.md)；發行韌體 binary 時可能需要額外的依賴聲明。
