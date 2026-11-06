@@ -1,10 +1,14 @@
 # Architecture and data flow
 
-```text
-Voice:   StickS3 <-- TLS-PSK / WSS --> Relay <-- Live --> Gemini
-Task:    Relay --> SQLite admission --> Egress proxy --> Grok Bot Routine
-Result:  Grok Bot Routine --> separate callback ingress --> Relay --> SQLite Inbox
-Read:    StickS3 --> Relay --> Inbox --> voice response
+```mermaid
+flowchart LR
+    device["StickS3 device"] <-->|"TLS-PSK / WSS"| relay["Relay"]
+    relay <-->|"FAST voice"| gemini["Gemini Live"]
+    relay <-->|"Task state and Inbox"| store[("SQLite")]
+    relay -->|"SLOW task submission"| proxy["Egress proxy"]
+    proxy --> routine["Grok Bot Routine"]
+    routine -->|"Callback result"| ingress["Separate callback ingress"]
+    ingress -->|"Authenticated callback"| relay
 ```
 
 The Relay owns authenticated device sessions and stores task state in SQLite. A delegated task is acknowledged after durable admission; an uncertain submission is not automatically replayed. The callback receiver authenticates a task-bound capability and handles duplicate results. The device can retrieve saved results from its own Inbox.

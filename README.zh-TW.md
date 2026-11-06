@@ -4,19 +4,15 @@
 
 Amusant 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、Gemini Live 語音與 Grok Bot 委派任務。
 
-```text
- +----------+   TLS-PSK / WSS   +----------------------+
- | StickS3  | <---------------> | Relay                |
- | 裝置     |                   |  - Gemini Live 快速路徑 | ---> Gemini Live
- +----------+                   |  - SQLite + Inbox    |
-                                |  - Grok Bot callback |
-                                +----------+-----------+
-                                           | 委派任務
-                                           v
-                                +----------------------+
-                                | Egress Proxy         | ---> Grok Bot Routine
-                                +----------------------+         |
-                                         callback ingress <------+
+```mermaid
+flowchart LR
+    device["StickS3 裝置"] <-->|"TLS-PSK / WSS"| relay["Relay"]
+    relay <-->|"FAST 即時語音"| gemini["Gemini Live"]
+    relay <-->|"任務與結果"| store[("SQLite / Inbox")]
+    relay -->|"SLOW 委派任務"| proxy["Egress Proxy"]
+    proxy --> routine["Grok Bot Routine"]
+    routine -->|"Callback"| ingress["獨立 callback ingress"]
+    ingress --> relay
 ```
 
 Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。目前仍是 staging 候選，尚未核准正式部署。
