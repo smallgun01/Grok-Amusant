@@ -1,6 +1,6 @@
 # Security
 
-Amusant is an experimental staging candidate; a supported release and response-time commitment have not yet been established.
+Amusant is experimental Public Alpha source; no supported production release or security response-time commitment has been established.
 
 Do not publish real credentials, device identifiers, private endpoints, or exploitable vulnerability details in an issue or pull request. Contact the repository owner through an existing private channel to coordinate a report; no public security contact or response SLA has yet been designated.
 

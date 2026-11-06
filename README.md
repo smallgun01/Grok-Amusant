@@ -15,7 +15,7 @@ flowchart LR
     ingress --> relay
 ```
 
-The callback ingress is a separately configured boundary; the sample Compose file does not publish it. The supported slow executor is `grok_callback`; missing or unsupported profiles fail closed. The project is a staging candidate, not an approved production deployment.
+The callback ingress is a separately configured boundary; the sample Compose file does not publish it. The supported slow executor is `grok_callback`; missing or unsupported profiles fail closed. This is experimental Public Alpha source, not an approved production deployment.
 
 ## Jellii screens
 
@@ -79,6 +79,8 @@ These tests use synthetic data and fake providers; they do not require real prov
 - [Configuration and safety](docs/configuration.md)
 - [Offline tests and builds](docs/quickstart.md)
 - [Firmware build](patches/amusant-sticks3-base-v0.12.0.md)
+- [Self-hosting guide (advanced; not turnkey)](docs/self-hosting.md)
+- [StickS3 BLE/QR Wi-Fi provisioning and USB recovery](docs/wifi-provisioning.md)
 - [Contributing](CONTRIBUTING.md) and [security](SECURITY.md)
 - [Third-party notices](NOTICE.md)
 
