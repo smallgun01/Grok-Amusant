@@ -1,0 +1,14 @@
+# Reference only. prepare.py generates a matching PRIVATE Caddyfile.
+# Port 443 belongs to raw device TLS-PSK, not Caddy.
+{
+    auto_https disable_redirects
+}
+
+callback.YOUR_DOMAIN:9443 {
+    tls {
+        issuer acme {
+            disable_tlsalpn_challenge
+        }
+    }
+    reverse_proxy 127.0.0.1:18645
+}

@@ -1,0 +1,8 @@
+# Single-host ingress reference; combine with ../oci-a1/compose.grok.yaml.
+# Raw TCP (including TLS-PSK ClientHello) is forwarded unchanged on 443.
+# The private callback ASGI listener stays localhost-only, behind host Caddy TLS on 9443.
+services:
+  relay:
+    ports:
+      - "0.0.0.0:443:8443/tcp"
+      - "127.0.0.1:18645:8645/tcp"

@@ -1,5 +1,7 @@
 # Self-hosting Amusant / Jellii (Public Alpha)
 
+**Start with the [step-by-step ARM64 reference installation](build-your-own-jellii.md)** for a concrete command sequence. This page explains components and safety boundaries; the reference installation is not yet independently live-E2E accepted.
+
 This guide explains how to reproduce the source builds and what a **self-hosted working device** additionally needs. **It is not a one-command installer or a validated internet-facing deployment recipe.** The published Compose configuration is intentionally incomplete at the ingress boundaries. Do not expose it on the internet without separately designing and testing those boundaries.
 
 ## System and prerequisites

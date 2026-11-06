@@ -17,6 +17,10 @@ flowchart LR
 
 Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。本專案為實驗性 Public Alpha 原始碼，尚未核准正式生產部署。
 
+## Build Your Own Jellii
+
+**想照著 README 建置自己的 Jellii？請從[ARM64 單機逐步建置指引](docs/build-your-own-jellii.zh-TW.md)開始。** 內容包含 Clone、配對的 Device／Relay 金鑰、Docker、TLS-PSK WSS、Grok HTTPS Callback、Firmware 刷機、BLE Wi-Fi，以及第一次 FAST／SLOW 驗收。這是具體的參考部署，但仍須自行提供 DNS、Gemini／Grok 帳號並完成實機 E2E；**尚不是經全新環境驗證的一鍵安裝流程**。
+
 ## Jellii 畫面
 
 | 待機 | 聆聽 | 思考 |
@@ -79,7 +83,8 @@ uv run --locked python -m unittest relay.tests.test_grok_callback relay.tests.te
 - [設定與安全邊界](docs/configuration.zh-TW.md)
 - [離線測試與建置](docs/quickstart.zh-TW.md)
 - [韌體建置](patches/amusant-sticks3-base-v0.12.0.md)
-- [自行架設指引（進階，非一鍵部署）](docs/self-hosting.zh-TW.md)
+- **[Build Your Own Jellii — ARM64 逐步建置](docs/build-your-own-jellii.zh-TW.md)**
+- [自行架設架構與限制](docs/self-hosting.zh-TW.md)
 - [StickS3 BLE／QR Wi-Fi 配網與 USB 備援](docs/wifi-provisioning.zh-TW.md)
 - [參與貢獻](CONTRIBUTING.md)與[安全政策](SECURITY.md)
 - [第三方聲明](NOTICE.md)
