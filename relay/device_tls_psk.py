@@ -27,7 +27,7 @@ def parse_psks(value: str | None) -> dict[str, bytes]:
             key = bytes.fromhex(hex_key)
         except ValueError:
             raise ValueError("AMUSANT_DEVICE_PSKS contains an invalid entry") from None
-        if len(key) != PSK_BYTES or identity in result or key in seen_keys:
+        if len(key) != PSK_BYTES or not any(key) or identity in result or key in seen_keys:
             raise ValueError("AMUSANT_DEVICE_PSKS identities and 32-byte keys must be unique")
         result[identity] = key
         seen_keys.add(key)
@@ -55,7 +55,7 @@ def build_server_context(psks: Mapping[str, bytes]) -> ssl.SSLContext:
     if not psk_callbacks_supported():
         raise ValueError("StickS3 TLS-PSK requires Python 3.13+ with ssl PSK callbacks")
     if not psks or any(
-        not IDENTITY_RE.fullmatch(identity) or not isinstance(key, bytes) or len(key) != PSK_BYTES
+        not IDENTITY_RE.fullmatch(identity) or not isinstance(key, bytes) or len(key) != PSK_BYTES or not any(key)
         for identity, key in psks.items()
     ):
         raise ValueError("StickS3 TLS-PSK configuration is invalid")
