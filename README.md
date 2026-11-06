@@ -17,6 +17,10 @@ flowchart LR
 
 The callback ingress is a separately configured boundary; the sample Compose file does not publish it. The supported slow executor is `grok_callback`; missing or unsupported profiles fail closed. This is experimental Public Alpha source, not an approved production deployment.
 
+## Build Your Own Jellii
+
+**Want to build and use your own device? Start with the [step-by-step ARM64 reference setup](docs/build-your-own-jellii.md).** It walks through cloning, matched private device/Relay credentials, Docker image builds, TLS-PSK WSS, HTTPS Grok callback, firmware flashing, BLE Wi-Fi provisioning, and first FAST/SLOW acceptance. This concrete topology still requires your own DNS, Gemini/Grok accounts, and physical E2E tests; it is **not yet a clean-room-tested one-command installer**.
+
 ## Jellii screens
 
 | Idle | Listening | Thinking |
@@ -79,7 +83,8 @@ These tests use synthetic data and fake providers; they do not require real prov
 - [Configuration and safety](docs/configuration.md)
 - [Offline tests and builds](docs/quickstart.md)
 - [Firmware build](patches/amusant-sticks3-base-v0.12.0.md)
-- [Self-hosting guide (advanced; not turnkey)](docs/self-hosting.md)
+- **[Build Your Own Jellii — step-by-step ARM64 setup](docs/build-your-own-jellii.md)**
+- [Self-hosting architecture and limits](docs/self-hosting.md)
 - [StickS3 BLE/QR Wi-Fi provisioning and USB recovery](docs/wifi-provisioning.md)
 - [Contributing](CONTRIBUTING.md) and [security](SECURITY.md)
 - [Third-party notices](NOTICE.md)
