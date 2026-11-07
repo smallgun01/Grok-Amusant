@@ -71,7 +71,7 @@ docker compose --env-file "$HOME/amusant-private/private.env" \
 
 The local Compose override adds a raw TCP ingress container that **binds port 443 to the chosen host LAN IP** and forwards encrypted device traffic to Relay. Relay remains on internal networks; the ingress container cannot reach the callback network. The callback listener is *not published* and should remain disabled while Grok is unconfigured. Your host firewall must allow **TCP 443 from your LAN**; do not forward it through your home router to the internet.
 
-**PASS:** Relay and Egress Proxy healthy. Inspect logs with `docker compose --env-file "$HOME/amusant-private/private.env" -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.local.yaml logs --tail=80 relay` if not healthy. Check secret permissions, occupied port 443, private Docker subnet overlap and Gemini API access.
+**PASS:** Relay and Egress Proxy healthy, and device ingress running. Inspect logs with `docker compose --env-file "$HOME/amusant-private/private.env" -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.local.yaml logs --tail=80 relay` if not healthy. Check secret permissions, occupied port 443, private Docker subnet overlap and Gemini API access.
 
 ## 4. Validate and flash StickS3
 
