@@ -75,9 +75,11 @@ jobs:
           if [ -z "$callback" ]; then echo "Callback unpublished PASS"; else echo "Callback unpublished FAIL"; failed=1; fi
           if python3 -c 'import socket,os; s=socket.create_connection((os.environ["HOST_IP"],443),timeout=5); s.close()'; then echo "443 TCP reachability PASS"; else echo "443 TCP reachability FAIL"; failed=1; fi
           SMOKE_DIR="$SMOKE_DIR" python3 - <<'PY'
-          import os, socket, ssl
+          import os, re, socket, ssl
           from pathlib import Path
-          identity, key = (Path(os.environ['SMOKE_DIR'])/'secrets/device_psks').read_text().strip().split(':', 1)
+          header = (Path(os.environ['RUNNER_TEMP'])/'fake-kai/src/secrets.h').read_text()
+          identity = re.search(r'KAI_PSK_IDENTITY "([^"]+)"', header).group(1)
+          key = re.search(r'KAI_PSK_HEX "([^"]+)"', header).group(1)
           ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
           ctx.check_hostname = False
           ctx.verify_mode = ssl.CERT_NONE
