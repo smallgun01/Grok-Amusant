@@ -17,7 +17,7 @@ jobs:
 
       - run: uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1/tests -p test_provision_wifi.py -v
       - run: uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1.5/tests -p test_provision_wifi.py -v
-      - run: uv run --locked python -m unittest discover -s deploy/selfhost -p test_prepare.py -v
+      - run: uv run --locked python -m unittest discover -s deploy/selfhost -p "test_*.py" -v
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 25
