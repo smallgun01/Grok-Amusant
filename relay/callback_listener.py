@@ -37,7 +37,8 @@ def callback_listener_config(environ, *, device_host: str) -> tuple[str, int]:
     raw_service_port = environ.get("AMUSANT_GROK_CALLBACK_SERVICE_PORT", "443")
     external_port = parts.port if parts.port is not None else 443
     if (not isinstance(raw_service_port, str) or not raw_service_port.isascii()
-            or not raw_service_port.isdigit() or external_port != 443 or int(raw_service_port) != external_port):
+            or not raw_service_port.isdigit() or not 1 <= int(raw_service_port) <= 65535
+            or int(raw_service_port) != external_port):
         raise ValueError("Callback service port must match its canonical HTTPS URL")
     return str(address), int(raw_port)
 
