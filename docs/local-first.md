@@ -60,6 +60,7 @@ From the Amusant repo:
 cd ~/Grok-Amusant
 docker build -f deploy/oci-a1/Dockerfile.relay -t amusant-relay:selfhost .
 docker build -f deploy/oci-a1/Dockerfile.egress-proxy -t amusant-egress:selfhost .
+docker build -f deploy/selfhost/Dockerfile.device-ingress -t amusant-device-ingress:selfhost .
 docker compose --env-file "$HOME/amusant-private/private.env" \
   -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.local.yaml config --quiet
 docker compose --env-file "$HOME/amusant-private/private.env" \

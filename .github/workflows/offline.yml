@@ -27,6 +27,7 @@ jobs:
         run: |
           docker build -f deploy/oci-a1/Dockerfile.relay -t amusant-relay:selfhost .
           docker build -f deploy/oci-a1/Dockerfile.egress-proxy -t amusant-egress:selfhost .
+          docker build -f deploy/selfhost/Dockerfile.device-ingress -t amusant-device-ingress:selfhost .
       - name: Prepare synthetic local configuration
         env:
           SMOKE_DIR: ${{ runner.temp }}/amusant-smoke
@@ -65,11 +66,31 @@ jobs:
           compose logs --tail=30 relay
           failed=0
           if [ "$relay" = healthy ] && [ "$proxy" = healthy ]; then echo "Health PASS"; else echo "Health FAIL"; failed=1; fi
-          mapping=$(docker port "$(compose ps -q relay)" 8443/tcp || true)
+          mapping=$(docker port "$(compose ps -q device_ingress)" 8443/tcp || true)
           if [ "$mapping" = "$HOST_IP:443" ]; then echo "443 mapping PASS"; else echo "443 mapping FAIL"; failed=1; fi
           callback=$(docker port "$(compose ps -q relay)" 8645/tcp || true)
           if [ -z "$callback" ]; then echo "Callback unpublished PASS"; else echo "Callback unpublished FAIL"; failed=1; fi
           if python3 -c 'import socket,os; s=socket.create_connection((os.environ["HOST_IP"],443),timeout=5); s.close()'; then echo "443 TCP reachability PASS"; else echo "443 TCP reachability FAIL"; failed=1; fi
+          # Controlled non-provider probe on the outbound-only network: Relay must not reach it directly.
+          docker run -d --name amusant-smoke-probe --network amusant-smoke_proxy_outbound --entrypoint python amusant-device-ingress:selfhost -m http.server 8080 >/dev/null
+          probe_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' amusant-smoke-probe)
+          if docker exec "$(compose ps -q relay)" /app/.venv/bin/python -c 'import socket,sys; socket.create_connection((sys.argv[1],8080),timeout=2)' "$probe_ip"; then echo "Direct egress isolation FAIL"; failed=1; else echo "Direct egress isolation PASS"; fi
+          docker rm -f amusant-smoke-probe >/dev/null
+          # Enable only the callback listener with a synthetic canonical Host. No provider call.
+          SMOKE_ENV="$SMOKE_DIR/private.env" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path(os.environ['SMOKE_ENV']); s=p.read_text()
+          s=s.replace('https://callback.example.invalid/callback/results','https://callback.example.com/callback/results').replace('AMUSANT_GROK_CALLBACK_TRUSTED_HOSTS=callback.example.invalid','AMUSANT_GROK_CALLBACK_TRUSTED_HOSTS=callback.example.com')
+          p.write_text(s)
+          PY
+          compose up -d
+          for i in $(seq 1 20); do
+            if curl --noproxy '*' -s -o /dev/null -X POST -H 'Host: callback.example.com' -w '%{http_code}' http://172.30.74.2:8645/callback/results | grep -qx 401; then echo "Private callback reachable PASS"; break; fi
+            if [ "$i" = 20 ]; then echo "Private callback reachable FAIL"; failed=1; fi
+            sleep 2
+          done
+          if [ -z "$(docker port "$(compose ps -q relay)" 8645/tcp 2>/dev/null || true)" ]; then echo "Callback remains unpublished PASS"; else echo "Callback remains unpublished FAIL"; failed=1; fi
           exit "$failed"
       - name: Teardown
         if: always()
