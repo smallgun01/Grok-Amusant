@@ -1,0 +1,10 @@
+# First-use LAN-only reference for Linux Docker (amd64 or arm64).
+# Binds the device TLS-PSK listener ONLY to the Docker host's LAN address.
+# Do not forward this port to the public internet.
+services:
+  relay:
+    platform: ${AMUSANT_DOCKER_PLATFORM:?set local Docker platform}
+    ports:
+      - "${HOST_LAN_IP:?set the host LAN IPv4}:443:8443/tcp"
+  egress_proxy:
+    platform: ${AMUSANT_DOCKER_PLATFORM:?set local Docker platform}

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import ipaddress
+import platform
 import os
 from pathlib import Path
 import re
@@ -18,6 +20,28 @@ REPO = Path(__file__).resolve().parents[2]
 TEMPLATE = REPO / "deploy/oci-a1/grok-staging.env.example"
 HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+LAN_NETWORKS = tuple(ipaddress.ip_network(net) for net in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+))
+
+
+def lan_ip(value: str) -> str:
+    try:
+        parsed = ipaddress.ip_address(value)
+    except ValueError:
+        raise ValueError("local mode requires an RFC1918 IPv4 address assigned to your host") from None
+    if not isinstance(parsed, ipaddress.IPv4Address) or not any(parsed in net for net in LAN_NETWORKS):
+        raise ValueError("local mode requires an RFC1918 IPv4 address assigned to your host")
+    return str(parsed)
+
+
+def local_platform() -> str:
+    arch = platform.machine().lower()
+    if arch in ("x86_64", "amd64"):
+        return "linux/amd64"
+    if arch in ("aarch64", "arm64"):
+        return "linux/arm64"
+    raise ValueError("local reference setup only supports native Linux amd64 or arm64")
 
 
 def host_name(value: str) -> str:
@@ -51,15 +75,24 @@ def safe_write(path: Path, content: str) -> None:
         stream.write(content)
 
 
-def prepare(*, private_dir: Path, firmware_dir: Path, device_host: str, callback_host: str,
-            owner_id: str, gemini_api_key: str, grok_routine_token: str,
-            grok_routine_url: str | None = None) -> dict[str, Path]:
-    device_host = host_name(device_host)
-    callback_host = host_name(callback_host)
+def prepare(*, private_dir: Path, firmware_dir: Path, device_host: str, callback_host: str | None = None,
+            owner_id: str, gemini_api_key: str, grok_routine_token: str | None = None,
+            grok_routine_url: str | None = None, mode: str = "cloud") -> dict[str, Path]:
+    if mode not in ("local", "cloud"):
+        raise ValueError("mode must be local or cloud")
+    if mode == "local":
+        device_host = lan_ip(device_host)
+        if callback_host is not None or grok_routine_url is not None:
+            raise ValueError("local FAST-first mode does not configure a public callback; add SLOW later")
+    else:
+        device_host = host_name(device_host)
+        callback_host = host_name(callback_host or "")
     if not OWNER_RE.fullmatch(owner_id):
         raise ValueError("owner ID must be a simple bounded identifier")
     if not gemini_api_key.strip() or any(x in gemini_api_key for x in "\r\n\x00"):
         raise ValueError("Gemini API key is missing or malformed")
+    if grok_routine_token is None:
+        grok_routine_token = secrets.token_urlsafe(32)
     if not grok_routine_token.strip() or any(x in grok_routine_token for x in "\r\n\x00") or len(grok_routine_token) < 12:
         raise ValueError("Grok Routine token is missing or malformed")
     if grok_routine_url is not None:
@@ -89,7 +122,6 @@ def prepare(*, private_dir: Path, firmware_dir: Path, device_host: str, callback
         "device_psks": private_dir / "secrets/device_psks",
         "grok_routine_token": private_dir / "secrets/grok_routine_token",
         "env": private_dir / "private.env",
-        "caddy": private_dir / "Caddyfile",
         "firmware": target,
     }
     updates = {
@@ -97,9 +129,10 @@ def prepare(*, private_dir: Path, firmware_dir: Path, device_host: str, callback
         "EGRESS_PROXY_IMAGE": "amusant-egress:selfhost",
         "AMUSANT_CLIENT_ID": owner_id,
         "AMUSANT_GROK_ROUTINE_URL": grok_routine_url or "https://routine.example.invalid/webhook",
-        "AMUSANT_GROK_CALLBACK_URL": f"https://{callback_host}:9443/callback/results",
-        "AMUSANT_GROK_CALLBACK_TRUSTED_HOSTS": callback_host,
-        "AMUSANT_GROK_CALLBACK_SERVICE_PORT": "9443",
+        "AMUSANT_GROK_CALLBACK_URL": (f"https://{callback_host}:9443/callback/results"
+                                         if mode == "cloud" else "https://callback.example.invalid/callback/results"),
+        "AMUSANT_GROK_CALLBACK_TRUSTED_HOSTS": (callback_host if mode == "cloud" else "callback.example.invalid"),
+        "AMUSANT_GROK_CALLBACK_SERVICE_PORT": ("9443" if mode == "cloud" else "443"),
         "OCI_DATA_DIR": str(private_dir / "data"),
         "GEMINI_API_KEY_FILE": str(paths["gemini_api_key"]),
         "DEVICE_TOKEN_FILE": str(paths["device_token"]),
@@ -117,6 +150,9 @@ def prepare(*, private_dir: Path, firmware_dir: Path, device_host: str, callback
             lines.append(line)
     if found != set(updates):
         raise ValueError("environment template changed; refusing to create incomplete configuration")
+    if mode == "local":
+        # Not part of the OCI template; consumed by compose.local.yaml only.
+        lines.extend((f"HOST_LAN_IP={device_host}", f"AMUSANT_DOCKER_PLATFORM={local_platform()}"))
 
     header = ("#pragma once\n"
               f'#define RELAY_HOST "{device_host}"\n'
@@ -134,7 +170,9 @@ def prepare(*, private_dir: Path, firmware_dir: Path, device_host: str, callback
     safe_write(paths["device_psks"], f"{identity}:{psk}\n")
     safe_write(paths["grok_routine_token"], grok_routine_token.strip() + "\n")
     safe_write(paths["env"], "\n".join(lines) + "\n")
-    safe_write(paths["caddy"], (
+    if mode == "cloud":
+        paths["caddy"] = private_dir / "Caddyfile"
+        safe_write(paths["caddy"], (
         "{\n"
         "    auto_https disable_redirects\n"
         "}\n\n"
@@ -144,9 +182,9 @@ def prepare(*, private_dir: Path, firmware_dir: Path, device_host: str, callback
         "            disable_tlsalpn_challenge\n"
         "        }\n"
         "    }\n"
-        "    reverse_proxy 127.0.0.1:18645\n"
+        "    reverse_proxy 172.30.74.2:8645\n"
         "}\n"
-    ))
+        ))
     safe_write(paths["firmware"], header)
     return paths
 
@@ -162,25 +200,33 @@ def secure_prompt(message: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device-host", required=True, help="real DNS hostname for the StickS3 TLS-PSK port 443")
-    parser.add_argument("--callback-host", required=True, help="real DNS hostname for HTTPS callback port 9443")
+    parser.add_argument("--device-host", required=True, help="LAN IPv4 with --local; real DNS hostname for cloud")
+    parser.add_argument("--local", action="store_true", help="LAN FAST-first mode; no public DNS or callback required")
+    parser.add_argument("--callback-host", help="real DNS hostname for cloud HTTPS callback port 9443")
     parser.add_argument("--private-dir", type=Path, required=True, help="new, non-repository private directory")
     parser.add_argument("--firmware-dir", type=Path, required=True, help="patched Kai firmware directory")
     parser.add_argument("--routine-url", default=None, help="optional Grok Routine HTTPS webhook URL; omit for FAST-first")
     parser.add_argument("--owner-id", default="owner-1")
     args = parser.parse_args()
     try:
-        host_name(args.device_host)
-        host_name(args.callback_host)
-        if args.routine_url is not None:
-            routine_url(args.routine_url)
+        if args.local:
+            lan_ip(args.device_host)
+            local_platform()
+            if args.callback_host is not None or args.routine_url is not None:
+                raise ValueError("--local FAST-first does not use --callback-host or --routine-url")
+        else:
+            host_name(args.device_host)
+            host_name(args.callback_host or "")
+            if args.routine_url is not None:
+                routine_url(args.routine_url)
         gemini = secure_prompt("Gemini API key (hidden): ")
-        routine_token = secure_prompt("Grok Routine bearer token (hidden; empty = generate a new one): ")
+        routine_token = (None if args.local else
+                         secure_prompt("Grok Routine bearer token (hidden; empty = generate a new one): "))
         result = prepare(private_dir=args.private_dir, firmware_dir=args.firmware_dir,
                          device_host=args.device_host, callback_host=args.callback_host,
                          owner_id=args.owner_id, gemini_api_key=gemini,
                          grok_routine_token=routine_token or secrets.token_urlsafe(32),
-                         grok_routine_url=args.routine_url)
+                         grok_routine_url=args.routine_url, mode="local" if args.local else "cloud")
     except (OSError, ValueError, RuntimeError) as exc:
         parser.exit(2, f"Configuration not generated: {exc}\n")
     print(f"Private configuration created at {result['env']} and firmware secrets.h (values not printed).")
