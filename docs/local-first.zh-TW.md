@@ -54,7 +54,7 @@ sudo chmod 0700 "$HOME"/amusant-private/data/relay
 
 上述指令只用於剛才新產生的目錄，**不要修改** `secrets.h` 或 `private.env`。Rootless Docker 有 UID 映射差異，須另行核對。
 
-## 3. 在本地 Build／啟動 Relay＋Egress 兩個容器
+## 3. 在本地 Build／啟動容器
 
 ```sh
 cd ~/Grok-Amusant
@@ -69,9 +69,9 @@ docker compose --env-file "$HOME/amusant-private/private.env" \
   -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.local.yaml ps
 ```
 
-Local Override 只切換到主機本身的 AMD64／ARM64，並**只在指定 LAN IPv4 開放 TCP 443**。Callback 不對外發布，而且 Grok 未配置前保持不可用。主機防火牆須允許**區網**連 TCP 443；**不要**在路由器開對外 Port Forward。
+Local Override 加入原始 TCP ingress 容器，**只在指定 LAN IPv4 開放 TCP 443**，將加密的裝置連線轉送至 Relay。Relay 本身仍使用內部網路；ingress 容器不連接 callback 網路。Callback 不對外發布，而且 Grok 未配置前保持不可用。主機防火牆須允許**區網**連 TCP 443；**不要**在路由器開對外 Port Forward。
 
-**PASS：**Relay／Egress Running、Healthy，SQLite 可保存。啟動不成功請看 Compose Logs，核對 Secret UID／GID、443 是否被佔用、Docker 私有網段衝突，以及 Gemini API。
+**PASS：**Relay／Egress Running、Healthy，device ingress Running，SQLite 可保存。啟動不成功請看 Compose Logs，核對 Secret UID／GID、443 是否被佔用、Docker 私有網段衝突，以及 Gemini API。
 
 ## 4. Preflash、編譯及刷入 StickS3
 
