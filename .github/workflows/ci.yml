@@ -1,0 +1,286 @@
+name: CI
+
+# PR and main-branch checks use synthetic inputs only. Never grant secrets to
+# pull_request jobs or use pull_request_target to execute contributed code.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scope:
+    name: Classify changed paths
+    runs-on: ubuntu-24.04
+    outputs:
+      offline: ${{ steps.classify.outputs.offline }}
+      firmware: ${{ steps.classify.outputs.firmware }}
+      images: ${{ steps.classify.outputs.images }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select test lanes
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          event = os.environ['EVENT_NAME']
+          base = os.environ.get('BASE_SHA', '')
+          head = os.environ.get('HEAD_SHA', '')
+
+          def valid_sha(value):
+              return bool(re.fullmatch(r'[0-9a-fA-F]{40}', value)) and set(value) != {'0'}
+
+          try:
+              if event == 'workflow_dispatch' or not (valid_sha(base) and valid_sha(head)):
+                  raise ValueError('full run requested or diff baseline unavailable')
+              changed = subprocess.check_output(
+                  ['git', 'diff', '--name-only', '-z', base, head, '--'],
+              ).decode().rstrip('\x00').split('\x00')
+              if not changed or changed == ['']:
+                  raise ValueError('empty change set; run all gates conservatively')
+          except (subprocess.CalledProcessError, ValueError):
+              changed = None
+
+          def docs_only(path):
+              return path.endswith(('.md', '.mdx', '.rst')) or (
+                  path.startswith('docs/images/') and
+                  path.lower().endswith(('.png', '.gif', '.jpg', '.jpeg', '.webp', '.svg'))
+              )
+
+          if changed is None:
+              offline = firmware = images = True
+          else:
+              non_docs = [path for path in changed if not docs_only(path)]
+              offline = bool(non_docs)
+              firmware = any(path.startswith('patches/') or path == '.github/workflows/firmware-build.yml'
+                             for path in non_docs)
+              images = any(
+                  path.startswith(('relay/', 'fast_voice/', 'deploy/')) or
+                  path in ('pyproject.toml', 'uv.lock', '.dockerignore',
+                           '.github/workflows/build-images.yml')
+                  for path in non_docs
+              )
+              if '.github/workflows/ci.yml' in non_docs:
+                  offline = firmware = images = True
+          for name, value in (('offline', offline), ('firmware', firmware), ('images', images)):
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as target:
+                  target.write(f'{name}={str(value).lower()}\n')
+          print(f'Selected: offline={offline}, firmware={firmware}, images={images}')
+          if changed is not None:
+              print('Changed paths:', ', '.join(changed))
+          PY
+
+  docs:
+    name: Lightweight docs and whitespace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check changed lines for whitespace errors
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          if [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] && [[ "$HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] && [[ ! "$BASE_SHA" =~ ^0+$ ]]; then
+            git diff --check "$BASE_SHA" "$HEAD_SHA" -- . ':(exclude)patches/amusant-sticks3-base-v0.12.0.patch'
+          fi
+      - name: Check internal Markdown links (no dependencies)
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import subprocess
+          import urllib.parse
+
+          root = pathlib.Path.cwd().resolve()
+          tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\x00')
+          errors = []
+          checked = 0
+          for filename in tracked:
+              if not filename.endswith(('.md', '.mdx')):
+                  continue
+              doc = root / filename
+              for match in re.finditer(r'!?\[[^\]\n]*\]\(([^)]+)\)', doc.read_text(encoding='utf-8')):
+                  url = match.group(1).strip()
+                  if not url or url.startswith('#') or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', url):
+                      continue
+                  path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
+                  if not path:
+                      continue
+                  resolved = (doc.parent / path).resolve()
+                  checked += 1
+                  if not resolved.is_relative_to(root) or not resolved.is_file():
+                      errors.append(f'{filename}: {url}')
+          if errors:
+              raise SystemExit('Broken Markdown paths:\n' + '\n'.join(errors))
+          print(f'Markdown path checks: {checked} PASS')
+          PY
+
+  offline:
+    needs: scope
+    if: needs.scope.outputs.offline == 'true'
+    name: Python 3.13 offline regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: python -m pip install uv==0.11.25
+      - run: uv sync --locked --extra hardware-opus --group dev
+      - name: Run supported Relay / Fast Voice regressions
+        run: >-
+          uv run --locked python -m unittest
+          relay.tests.test_task_store_migration
+          relay.tests.test_dispatcher
+          relay.tests.test_slow_path
+          relay.tests.test_runtime_dependency_isolation
+          relay.tests.test_public_ignore
+          relay.tests.test_public_profile
+          relay.tests.test_grok_callback
+          relay.tests.test_inbox
+          fast_voice.tests.test_contract
+          relay.tests.test_device_protocol
+          relay.tests.test_device_tls_psk
+          relay.tests.test_callback_listener -v
+      - name: Preflash and USB Wi-Fi setup tests
+        run: |
+          uv run --locked python -m unittest discover -s patches/sticks3-baseline -p test_preflash.py -v
+          uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1/tests -p test_provision_wifi.py -v
+          uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1.5/tests -p test_provision_wifi.py -v
+      - name: Self-host private configuration tests (when present)
+        shell: bash
+        run: |
+          if [[ -f deploy/selfhost/test_prepare.py ]]; then
+            uv run --locked python -m unittest discover -s deploy/selfhost -p test_prepare.py -v
+          fi
+
+  firmware:
+    needs: scope
+    if: needs.scope.outputs.firmware == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    name: Pinned Kai StickS3 build and host tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PLATFORMIO_SETTING_ENABLE_TELEMETRY: 'No'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: zbruceli/kai
+          ref: 1681fb3c11acd28525d8987bba4b9bf4bc2a288f
+          path: kai-upstream
+          persist-credentials: false
+      - name: Verify pinned upstream and apply patch
+        run: |
+          test "$(git -C kai-upstream rev-parse HEAD)" = 1681fb3c11acd28525d8987bba4b9bf4bc2a288f
+          git -C kai-upstream apply --check "$GITHUB_WORKSPACE/patches/amusant-sticks3-base-v0.12.0.patch"
+          git -C kai-upstream apply "$GITHUB_WORKSPACE/patches/amusant-sticks3-base-v0.12.0.patch"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: python -m pip install platformio==6.2.0 -r patches/kai-v0.12.0-wifi-w1/tools/requirements.txt
+      - name: Run host C++ and BLE / Wi-Fi tests
+        run: |
+          python patches/kai-v0.12.0-wifi-w1/tests/run_host_tests.py --firmware-root kai-upstream/firmware
+          python patches/kai-v0.12.0-wifi-w1.5/tests/run_host_tests.py --firmware-root kai-upstream/firmware
+          python patches/kai-v0.12.0-wifi-w2b1/tests/run_host_tests.py --firmware-root kai-upstream/firmware --wifi-tests patches/kai-v0.12.0-wifi-w1.5/tests
+          python patches/kai-v0.12.0-wifi-w2bqr/tests/check_owner_setup_wiring.py --firmware-root kai-upstream/firmware
+          g++ -std=c++11 -Wall -Wextra -Werror -I kai-upstream/firmware/src patches/kai-v0.12.0-cjk-display/tests/test_cjk_layout.cpp -o "$RUNNER_TEMP/cjk-layout"
+          "$RUNNER_TEMP/cjk-layout"
+      - name: Compile-only firmware build with synthetic credentials
+        env:
+          PLATFORMIO_CORE_DIR: ${{ runner.temp }}/platformio
+        run: |
+          cat > kai-upstream/firmware/src/secrets.h <<'EOF'
+          #pragma once
+          #define RELAY_HOST "relay.invalid"
+          #define RELAY_PORT 8765
+          #define RELAY_TLS_PORT 443
+          #define KAI_PSK_IDENTITY "compile-only"
+          #define KAI_PSK_HEX "0000000000000000000000000000000000000000000000000000000000000000"
+          #define KAI_DEVICE_TOKEN "compile-only-placeholder"
+          EOF
+          platformio run -d kai-upstream/firmware -e sticks3
+
+  images:
+    needs: scope
+    if: needs.scope.outputs.images == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    name: ARM64 Relay / Egress image builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ARM64 images from scratch
+        run: |
+          docker buildx build --no-cache --platform linux/arm64 --load -f deploy/oci-a1/Dockerfile.relay -t amusant-relay:ci .
+          docker buildx build --no-cache --platform linux/arm64 --load -f deploy/oci-a1/Dockerfile.egress-proxy -t amusant-egress:ci .
+      - name: Check image platform and offline Python startup
+        run: |
+          test "$(docker image inspect amusant-relay:ci --format '{{.Architecture}}')" = arm64
+          test "$(docker image inspect amusant-egress:ci --format '{{.Architecture}}')" = arm64
+          docker run --rm --platform linux/arm64 --network none --read-only --entrypoint /app/.venv/bin/python amusant-relay:ci -c 'import relay.live_bridge; print("RELAY_IMPORT_PASS")'
+
+  result:
+    name: CI result gate
+    if: always()
+    needs: [scope, docs, offline, firmware, images]
+    runs-on: ubuntu-24.04
+    env:
+      SCOPE: ${{ needs.scope.result }}
+      DOCS: ${{ needs.docs.result }}
+      OFFLINE_EXPECTED: ${{ needs.scope.outputs.offline }}
+      FIRMWARE_EXPECTED: ${{ needs.scope.outputs.firmware }}
+      IMAGES_EXPECTED: ${{ needs.scope.outputs.images }}
+      IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
+      OFFLINE_STATUS: ${{ needs.offline.result }}
+      FIRMWARE_STATUS: ${{ needs.firmware.result }}
+      IMAGES_STATUS: ${{ needs.images.result }}
+    steps:
+      - name: Require every selected lane to pass
+        shell: bash
+        run: |
+          test "$SCOPE" = success && test "$DOCS" = success
+          check_lane() {
+            local wanted="$1" actual="$2" flag="$3"
+            if [[ "$wanted" == true && "$flag" != true ]]; then
+              test "$actual" = success
+            else
+              test "$actual" = skipped
+            fi
+          }
+          check_lane "$OFFLINE_EXPECTED" "$OFFLINE_STATUS" false
+          check_lane "$FIRMWARE_EXPECTED" "$FIRMWARE_STATUS" "$IS_DRAFT"
+          check_lane "$IMAGES_EXPECTED" "$IMAGES_STATUS" "$IS_DRAFT"
