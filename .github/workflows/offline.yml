@@ -23,6 +23,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
       - name: Build local images
         run: |
           docker build -f deploy/oci-a1/Dockerfile.relay -t amusant-relay:selfhost .
@@ -71,9 +74,25 @@ jobs:
           callback=$(docker port "$(compose ps -q relay)" 8645/tcp || true)
           if [ -z "$callback" ]; then echo "Callback unpublished PASS"; else echo "Callback unpublished FAIL"; failed=1; fi
           if python3 -c 'import socket,os; s=socket.create_connection((os.environ["HOST_IP"],443),timeout=5); s.close()'; then echo "443 TCP reachability PASS"; else echo "443 TCP reachability FAIL"; failed=1; fi
+          SMOKE_DIR="$SMOKE_DIR" python3 - <<'PY'
+          import os, socket, ssl
+          from pathlib import Path
+          identity, key = (Path(os.environ['SMOKE_DIR'])/'secrets/device_psks').read_text().strip().split(':', 1)
+          ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+          ctx.check_hostname = False
+          ctx.verify_mode = ssl.CERT_NONE
+          ctx.minimum_version = ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+          ctx.set_ciphers('ECDHE-PSK-CHACHA20-POLY1305:ECDHE-PSK-AES128-CBC-SHA256')
+          ctx.set_psk_client_callback(lambda hint: (identity, bytes.fromhex(key)))
+          with socket.create_connection((os.environ['HOST_IP'], 443), timeout=5) as raw:
+              with ctx.wrap_socket(raw, server_hostname=None) as tls:
+                  assert tls.version() == 'TLSv1.2'
+          print('Synthetic TLS-PSK handshake through LAN ingress PASS')
+          PY
           # Controlled non-provider probe on the outbound-only network: Relay must not reach it directly.
           docker run -d --name amusant-smoke-probe --network amusant-smoke_proxy_outbound --entrypoint python amusant-device-ingress:selfhost -m http.server 8080 >/dev/null
           probe_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' amusant-smoke-probe)
+          docker exec "$(compose ps -q egress_proxy)" python -c 'import socket,sys,time; time.sleep(1); socket.create_connection((sys.argv[1],8080),timeout=5).close()' "$probe_ip"
           if docker exec "$(compose ps -q relay)" /app/.venv/bin/python -c 'import socket,sys; socket.create_connection((sys.argv[1],8080),timeout=2)' "$probe_ip"; then echo "Direct egress isolation FAIL"; failed=1; else echo "Direct egress isolation PASS"; fi
           docker rm -f amusant-smoke-probe >/dev/null
           # Enable only the callback listener with a synthetic canonical Host. No provider call.
