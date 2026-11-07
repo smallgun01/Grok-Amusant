@@ -18,3 +18,60 @@ jobs:
       - run: uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1/tests -p test_provision_wifi.py -v
       - run: uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1.5/tests -p test_provision_wifi.py -v
       - run: uv run --locked python -m unittest discover -s deploy/selfhost -p test_prepare.py -v
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build local images
+        run: |
+          docker build -f deploy/oci-a1/Dockerfile.relay -t amusant-relay:selfhost .
+          docker build -f deploy/oci-a1/Dockerfile.egress-proxy -t amusant-egress:selfhost .
+      - name: Prepare synthetic local configuration
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/amusant-smoke
+        run: |
+          host_ip=$(hostname -I | awk '{print $1}')
+          echo "HOST_IP=$host_ip" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/fake-kai/src"
+          touch "$RUNNER_TEMP/fake-kai/src/secrets.example.h"
+          HOST_IP="$host_ip" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from deploy.selfhost.prepare import prepare
+          prepare(private_dir=Path(os.environ['SMOKE_DIR']), firmware_dir=Path(os.environ['RUNNER_TEMP'])/'fake-kai', device_host=os.environ['HOST_IP'], owner_id='smoke-owner', gemini_api_key='synthetic-key-no-provider-use', mode='local')
+          PY
+          sudo chown root:20000 "$SMOKE_DIR"/secrets/*
+          sudo chmod 0440 "$SMOKE_DIR"/secrets/*
+          sudo chown 10001:10001 "$SMOKE_DIR/data/relay"
+          sudo chmod 0700 "$SMOKE_DIR/data/relay"
+      - name: Start and verify health and network
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/amusant-smoke
+        run: |
+          set -eu
+          compose() { docker compose --project-name amusant-smoke --env-file "$SMOKE_DIR/private.env" -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.local.yaml "$@"; }
+          compose config --quiet
+          compose up -d
+          for i in $(seq 1 30); do
+            relay=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q relay)")
+            proxy=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q egress_proxy)")
+            if [ "$relay" = healthy ] && [ "$proxy" = healthy ]; then break; fi
+            sleep 3
+          done
+          compose ps
+          test "$relay" = healthy
+          test "$proxy" = healthy
+          mapping=$(docker port "$(compose ps -q relay)" 8443/tcp)
+          test "$mapping" = "$HOST_IP:443"
+          test -z "$(docker port "$(compose ps -q relay)" 8645/tcp)"
+          python3 -c 'import socket,os; s=socket.create_connection((os.environ["HOST_IP"],443),timeout=5); s.close()'
+          echo 'TCP mapping, health and callback non-publication PASS'
+      - name: Teardown
+        if: always()
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/amusant-smoke
+        run: |
+          if [ -f "$SMOKE_DIR/private.env" ]; then
+            docker compose --project-name amusant-smoke --env-file "$SMOKE_DIR/private.env" -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.local.yaml down -v || true
+          fi
