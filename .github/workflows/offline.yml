@@ -60,13 +60,14 @@ jobs:
             sleep 3
           done
           compose ps
-          test "$relay" = healthy
-          test "$proxy" = healthy
-          mapping=$(docker port "$(compose ps -q relay)" 8443/tcp)
-          test "$mapping" = "$HOST_IP:443"
-          test -z "$(docker port "$(compose ps -q relay)" 8645/tcp)"
-          python3 -c 'import socket,os; s=socket.create_connection((os.environ["HOST_IP"],443),timeout=5); s.close()'
-          echo 'TCP mapping, health and callback non-publication PASS'
+          failed=0
+          if [ "$relay" = healthy ] && [ "$proxy" = healthy ]; then echo "Health PASS"; else echo "Health FAIL"; failed=1; fi
+          mapping=$(docker port "$(compose ps -q relay)" 8443/tcp || true)
+          if [ "$mapping" = "$HOST_IP:443" ]; then echo "443 mapping PASS"; else echo "443 mapping FAIL"; failed=1; fi
+          callback=$(docker port "$(compose ps -q relay)" 8645/tcp || true)
+          if [ -z "$callback" ]; then echo "Callback unpublished PASS"; else echo "Callback unpublished FAIL"; failed=1; fi
+          if python3 -c 'import socket,os; s=socket.create_connection((os.environ["HOST_IP"],443),timeout=5); s.close()'; then echo "443 TCP reachability PASS"; else echo "443 TCP reachability FAIL"; failed=1; fi
+          exit "$failed"
       - name: Teardown
         if: always()
         env:
