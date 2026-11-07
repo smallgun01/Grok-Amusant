@@ -19,7 +19,9 @@ The callback ingress is a separately configured boundary; the sample Compose fil
 
 ## Build Your Own Jellii
 
-**Want to build and use your own device? Start with the [step-by-step ARM64 reference setup](docs/build-your-own-jellii.md).** It walks through cloning, matched private device/Relay credentials, Docker image builds, TLS-PSK WSS, HTTPS Grok callback, firmware flashing, BLE Wi-Fi provisioning, and first FAST/SLOW acceptance. This concrete topology still requires your own DNS, Gemini/Grok accounts, and physical E2E tests; it is **not yet a clean-room-tested one-command installer**.
+**First-time builder? Follow the [Local-first Quick Start](docs/local-first.md): Linux PC + StickS3 + Gemini API key → Docker → Flash → BLE Wi-Fi → first spoken FAST answer.** No domain, public inbound ports or cloud server required. After FAST, add Grok Callback using a temporary HTTPS tunnel or follow the [ARM64 / OCI advanced deployment](docs/build-your-own-jellii.md).
+
+Amusant has already passed **owner-operated local StickS3/Gemini FAST physical E2E** and **OCI StickS3/Gemini/Grok/Callback/Inbox physical E2E**. The public setup instructions have **not yet been independently clean-room reproduced**; these are separate claims.
 
 ## Jellii screens
 
@@ -83,7 +85,8 @@ These tests use synthetic data and fake providers; they do not require real prov
 - [Configuration and safety](docs/configuration.md)
 - [Offline tests and builds](docs/quickstart.md)
 - [Firmware build](patches/amusant-sticks3-base-v0.12.0.md)
-- **[Build Your Own Jellii — step-by-step ARM64 setup](docs/build-your-own-jellii.md)**
+- **[Build Your Own Jellii — Local-first Quick Start](docs/local-first.md)**
+- [Advanced: ARM64 / OCI-style deployment](docs/build-your-own-jellii.md)
 - [Self-hosting architecture and limits](docs/self-hosting.md)
 - [StickS3 BLE/QR Wi-Fi provisioning and USB recovery](docs/wifi-provisioning.md)
 - [Contributing](CONTRIBUTING.md) and [security](SECURITY.md)
@@ -101,7 +104,7 @@ docs/          architecture, configuration and quick start
 third_party/   applicable upstream license notices
 ```
 
-Some compatibility code remains for historical data and testing; it is not a supported public backend. The Compose example has deliberately invalid image and endpoint placeholders and requires separately designed device and callback ingress.
+Some compatibility code remains for historical data and testing; it is not a supported public backend. The base Compose has deliberately invalid endpoint placeholders; the local-first and advanced guides supply distinct, explicitly selected runtime configurations.
 
 ## License
 

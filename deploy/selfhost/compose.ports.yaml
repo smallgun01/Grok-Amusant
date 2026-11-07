@@ -1,8 +1,8 @@
-# Single-host ingress reference; combine with ../oci-a1/compose.grok.yaml.
-# Raw TCP (including TLS-PSK ClientHello) is forwarded unchanged on 443.
-# The private callback ASGI listener stays localhost-only, behind host Caddy TLS on 9443.
+# Single-host advanced ingress: only device TLS-PSK is published.
+# The callback listener binds its separate private callback_api interface
+# at RELAY_CALLBACK_BIND_IP:8645, reachable from a rootful Linux Docker host
+# by the bridge route. Never expose that HTTP port to the public internet.
 services:
   relay:
     ports:
       - "0.0.0.0:443:8443/tcp"
-      - "127.0.0.1:18645:8645/tcp"

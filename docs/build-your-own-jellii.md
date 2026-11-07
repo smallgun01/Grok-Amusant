@@ -1,4 +1,6 @@
-# Build Your Own Jellii — ARM64 reference setup
+# Advanced: ARM64 / OCI-style hosted Jellii setup
+
+**New to Jellii? Start with [Local-first Quick Start](local-first.md)** instead. This page covers the more demanding always-on / publicly reachable deployment after your first local FAST result.
 
 **Public Alpha: executable reference, not yet independently live-E2E verified.** Start here if you want to build and use your own StickS3. This recipe preserves the original TLS-PSK device transport and separately authenticated HTTPS Grok callback. It assumes a *single trusted Ubuntu ARM64 Linux host* with Docker Engine 28+, Docker Compose v2, Python 3.13, Git and internet access. A StickS3, its USB flashing connection, and Gemini API credentials are required. The Grok Bot Routine is needed for SLOW tasks.
 
@@ -67,11 +69,11 @@ docker compose --env-file "$HOME/amusant-private/private.env" \
   -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.ports.yaml ps
 ```
 
-**PASS:** Both containers are running/healthy and SQLite persists across a container restart. The small [ports override](../deploy/selfhost/compose.ports.yaml) preserves raw TCP TLS-PSK handshake on host port 443, forwards it to the Relay's private 8443, and exposes callback port 8645 **only as host loopback 127.0.0.1:18645**. Inspect local Compose logs if startup fails; check secret permissions, private subnet conflicts and occupied ports. Never publish the internal proxy or raw callback port directly.
+**PASS:** Both containers are running/healthy and SQLite persists across a container restart. The small [ports override](../deploy/selfhost/compose.ports.yaml) preserves raw TCP TLS-PSK handshake on host port 443, forwards it to the Relay's private 8443, and leaves the Callback Listener on its own private Docker bridge interface `RELAY_CALLBACK_BIND_IP:8645` (default `172.30.74.2:8645`), **not a host-published port**. Host Caddy must explicitly reach that private bridge address on a trusted rootful Linux Docker host; verify reachability before internet use. Inspect local Compose logs if startup fails; check secret permissions, private subnet conflicts and occupied ports. Never publish the internal proxy or raw callback port directly.
 
 ## 4. Configure HTTPS callback, separate from StickS3 TLS-PSK
 
-Install [Caddy on the host](https://caddyserver.com/docs/install). The setup script generated the hostname-specific Caddyfile using HTTPS callback port 9443 and ACME **HTTP-01** on 80 (the TLS-ALPN challenge is disabled so 443 remains for PSK):
+Install [Caddy on the host](https://caddyserver.com/docs/install). The setup script generated the hostname-specific Caddyfile proxying to the separate private callback Docker bridge IP (default `172.30.74.2:8645`) using HTTPS callback port 9443 and ACME **HTTP-01** on 80 (the TLS-ALPN challenge is disabled so 443 remains for PSK):
 
 ```sh
 sudo install -o root -g root -m 0644 "$HOME/amusant-private/Caddyfile" /etc/caddy/Caddyfile
@@ -87,7 +89,7 @@ curl -i -X POST 'https://callback.your-real-domain.net:9443/callback/results' \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-**HTTP 401** is expected from the Relay: TLS, Caddy forwarding and the callback receiver are reachable, but the request intentionally lacks a task capability. HTTP 404/502, TLS failure or timeout are **not** PASS. Caddy must preserve the request Host (including :9443) and path. The device WSS endpoint is different from this callback URL.
+**HTTP 401** is expected from the Relay: TLS, Caddy forwarding and the callback receiver are reachable, but the request intentionally lacks a task capability. Confirm the host can reach the callback bridge address `172.30.74.2:8645` and that Caddy uses that exact upstream; do not expose it publicly. HTTP 404/502, TLS failure or timeout are **not** PASS. Caddy must preserve the request Host (including :9443) and path. The device WSS endpoint is different from this callback URL.
 
 ## 5. Validate, build and flash the real StickS3
 

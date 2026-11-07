@@ -1,4 +1,6 @@
-# Build Your Own Jellii — ARM64 單機參考建置
+# 進階：ARM64／OCI 類型常駐部署
+
+**第一次使用請先走 [Local-first 快速建置](local-first.zh-TW.md)**；本頁是本地 FAST 成功後，才需要考慮的進階雲端／常駐部署。
 
 **狀態：Public Alpha 可執行參考流程，尚未通過獨立全新環境實機 E2E 驗收。** 這份文件提供從原始碼到 FAST／SLOW 的逐步操作，不會為了簡單而移除 TLS-PSK 或 Callback 的驗證。適用一台安裝 Docker Engine 28+、Compose v2、Python 3.13、Git 的 **Ubuntu Linux ARM64** 主機，搭配 M5Stack StickS3、USB 刷機連線及自己的 Gemini API Key；SLOW 另需 Grok Bot Routine。
 
@@ -62,11 +64,11 @@ docker compose --env-file "$HOME/amusant-private/private.env" \
   -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.ports.yaml ps
 ```
 
-**PASS：**Relay／Egress 都 Running、Healthy，SQLite 經容器重啟仍有資料。[Ports Override](../deploy/selfhost/compose.ports.yaml) 讓 Host 443 保留 **TLS-PSK 原始 TCP** 直接對接 Relay 私有 8443；Callback 8645 **僅**轉到 Host 本地 `127.0.0.1:18645`。注意私網 CIDR 衝突、Secret 權限、埠口佔用。不可直接公開內部 Callback 或 Egress Proxy。
+**PASS：**Relay／Egress 都 Running、Healthy，SQLite 經容器重啟仍有資料。[Ports Override](../deploy/selfhost/compose.ports.yaml) 讓 Host 443 保留 **TLS-PSK 原始 TCP** 直接對接 Relay 私有 8443；Callback Listener 保留在**獨立 Docker 私有 Bridge IP**（`RELAY_CALLBACK_BIND_IP:8645`，範例 `172.30.74.2:8645`），**不公開映射到 Host Port**。Host 上的 Caddy 必須能直接連到這個私有 IP；使用 rootful Linux Docker 並先實測。注意私網 CIDR 衝突、Secret 權限、埠口佔用。不可直接公開內部 Callback 或 Egress Proxy。
 
 ## 4. Callback HTTPS（與裝置 TLS-PSK 不同）
 
-依[Caddy 官方安裝說明](https://caddyserver.com/docs/install)在 Host 安裝。Caddy 在 **9443** 提供 Callback HTTPS，透過 **80** 完成 ACME HTTP-01 憑證驗證；TLS-ALPN 挑戰停用，因為 443 保留給 StickS3。工具已產生正確 Callback Domain 的私人 Caddyfile：
+依[Caddy 官方安裝說明](https://caddyserver.com/docs/install)在 Host 安裝。Caddy 在 **9443** 提供 Callback HTTPS，以私有 Docker Callback Bridge IP（範例 `172.30.74.2:8645`）作為 Upstream，透過 **80** 完成 ACME HTTP-01 憑證驗證；TLS-ALPN 挑戰停用，因為 443 保留給 StickS3。工具已產生正確 Callback Domain 的私人 Caddyfile：
 
 ```sh
 sudo install -o root -g root -m 0644 "$HOME/amusant-private/Caddyfile" /etc/caddy/Caddyfile
@@ -82,7 +84,7 @@ curl -i -X POST 'https://callback.your-real-domain.net:9443/callback/results' \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-**PASS：**應收到 Relay 回的 **HTTP 401**，證明 TLS、反向代理與 Callback Receiver 可達，但因未提供 Task Capability 而被拒。404／502／TLS 錯誤／Timeout 都不算成功。代理要保留 `Host`（含 :9443）與 URL Path；Callback 與 Device WSS 是不同端點。
+**PASS：**應收到 Relay 回的 **HTTP 401**，證明 TLS、反向代理與 Callback Receiver 可達，但因未提供 Task Capability 而被拒。先確認 Host 可連至 `172.30.74.2:8645`，且 Caddy Upstream 指向該私有 Bridge IP；切勿對外直接暴露此埠。404／502／TLS 錯誤／Timeout 都不算成功。代理要保留 `Host`（含 :9443）與 URL Path；Callback 與 Device WSS 是不同端點。
 
 ## 5. 真實 StickS3 韌體編譯／刷機
 

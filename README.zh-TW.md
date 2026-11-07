@@ -19,7 +19,9 @@ Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支�
 
 ## Build Your Own Jellii
 
-**想照著 README 建置自己的 Jellii？請從[ARM64 單機逐步建置指引](docs/build-your-own-jellii.zh-TW.md)開始。** 內容包含 Clone、配對的 Device／Relay 金鑰、Docker、TLS-PSK WSS、Grok HTTPS Callback、Firmware 刷機、BLE Wi-Fi，以及第一次 FAST／SLOW 驗收。這是具體的參考部署，但仍須自行提供 DNS、Gemini／Grok 帳號並完成實機 E2E；**尚不是經全新環境驗證的一鍵安裝流程**。
+**第一次自己做 Jellii？請走 [Local-first 快速建置](docs/local-first.zh-TW.md)：Linux 電腦＋StickS3＋Gemini API Key → Docker → 刷機 → BLE Wi-Fi → 第一次 FAST 開口說話。** 不需要先準備網域、公開 Port 或雲端主機。FAST 成功後再加 Grok Callback，或依照[進階 ARM64／OCI 部署](docs/build-your-own-jellii.zh-TW.md)搬到雲端。
+
+Amusant **已通過 Owner 本地 StickS3／Gemini FAST 實機 E2E**，以及 **OCI StickS3／Gemini／Grok／Callback／Inbox 實機 E2E**。但新的公開安裝教學**尚未由陌生使用者從乾淨環境獨立重現**，兩者不可混淆。
 
 ## Jellii 畫面
 
@@ -83,7 +85,8 @@ uv run --locked python -m unittest relay.tests.test_grok_callback relay.tests.te
 - [設定與安全邊界](docs/configuration.zh-TW.md)
 - [離線測試與建置](docs/quickstart.zh-TW.md)
 - [韌體建置](patches/amusant-sticks3-base-v0.12.0.md)
-- **[Build Your Own Jellii — ARM64 逐步建置](docs/build-your-own-jellii.zh-TW.md)**
+- **[Build Your Own Jellii — Local-first 快速建置](docs/local-first.zh-TW.md)**
+- [進階：ARM64／OCI 類型部署](docs/build-your-own-jellii.zh-TW.md)
 - [自行架設架構與限制](docs/self-hosting.zh-TW.md)
 - [StickS3 BLE／QR Wi-Fi 配網與 USB 備援](docs/wifi-provisioning.zh-TW.md)
 - [參與貢獻](CONTRIBUTING.md)與[安全政策](SECURITY.md)
@@ -101,7 +104,7 @@ docs/          架構、設定及快速開始
 third_party/   上游授權聲明
 ```
 
-Repository 保留部分歷史資料相容與測試程式，不代表支援這些舊後端。Compose 範例的 image 與服務網址刻意設為無效 placeholder，裝置與 callback ingress 必須另行設計。
+Repository 保留部分歷史資料相容與測試程式，不代表支援這些舊後端。Base Compose 的服務網址刻意使用無效 Placeholder；Local-first 與進階指引則分別提供明確的部署組態。
 
 ## 授權
 

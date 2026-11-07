@@ -1,6 +1,6 @@
 # 自行架設 Amusant / Jellii（Public Alpha）
 
-**請先看[ARM64 逐步建置指引](build-your-own-jellii.zh-TW.md)**，內含具體指令。本文補充元件及安全邊界；參考部署尚未經獨立全新環境實機 E2E 驗證。
+**先從 [Local-first 快速建置](local-first.zh-TW.md)完成第一次 FAST 語音，再看[進階 ARM64／OCI 部署](build-your-own-jellii.zh-TW.md)**。本文補充元件及安全邊界；參考部署尚未經獨立全新環境實機 E2E 驗證。
 
 本文件說明如何重現原始碼建置，以及讓自架 StickS3 真正能使用還需要哪些項目。**這不是一鍵安裝程式，也不是已完成網際網路部署驗證的範例。** Repo 內的 Compose 刻意沒有提供完整 Ingress；請勿在未自行設計、驗證安全邊界前直接公開服務。
 
