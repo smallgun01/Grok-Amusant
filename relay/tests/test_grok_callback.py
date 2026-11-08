@@ -12,7 +12,7 @@ import urllib.request
 from unittest.mock import patch
 from uuid import uuid4
 
-from fast_voice.contracts import ToolCallEvent
+from fast_voice.contracts import ProviderError, ToolCallEvent, TurnCompleteEvent
 from relay.dispatcher import AsyncDispatcher
 from relay.grok_callback import create_grok_callback_app
 from relay.grok_callback_executor import GrokCallbackExecutor, GrokConfigError, GrokRoutineConfig, _post_once
@@ -23,7 +23,7 @@ from relay.slow_path import (
     build_cancel_task_tool,
     build_check_task_status_tool,
 )
-from relay.task_store import SQLiteTaskStore, TaskAdmissionRequest
+from relay.task_store import AdmissionBusy, SQLiteTaskStore, TaskAdmissionRequest
 
 CLIENT = "grok-owner"
 CALLBACK_URL = "https://callback.example.com:8443/callback/results"
@@ -780,6 +780,476 @@ class GrokCallbackTests(unittest.IsolatedAsyncioTestCase):
             revoked_app, _report(revoked_id), token=revoked_payload["result_token"]
         )
         self.assertEqual(status, 401)
+
+    async def test_ptt_abandon_requires_later_single_use_confirmation(self):
+        captured = {}
+        def accepted(_url, body, _bearer, _proxy, _timeout):
+            captured.update(json.loads(body))
+            return 200
+        await self.make_executor(accepted).execute(self.claimed)
+        router = SlowPathToolRouter(
+            store=self.store, client_id=CLIENT, conversation_id="session-1",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now,
+        )
+        async def call(turn, **args):
+            return await router(ToolCallEvent("call-" + str(uuid4()), "cancel_task", args), turn)
+        self.assertEqual((await call(1, confirm=True))["status"], "rejected")
+        warning = await call(2)
+        self.assertEqual(warning["status"], "confirmation_required")
+        self.assertEqual(warning["message"], "確定放棄嗎？Grok 可能繼續執行唷。")
+        self.assertEqual((await call(2, confirm=True))["status"], "rejected")
+        unchanged = self.store.get_by_task_id(self.task_id)
+        self.assertEqual(unchanged["status"], "running")
+        self.assertEqual(unchanged["dispatch_state"], "sent")
+        self.assertEqual(unchanged["last_error"], None)
+        self.assertEqual((await call(3))["status"], "confirmation_required")
+        self.assertEqual((await call(4, task_id="wrong", confirm=True))["status"], "rejected")
+        self.assertEqual((await call(5))["status"], "confirmation_required")
+        results = await asyncio.gather(call(6, confirm=True), call(6, confirm=True))
+        self.assertEqual(sorted(r["status"] for r in results), ["abandoned", "rejected"])
+        status, late = await _asgi_call(self.callback_app, _report(self.task_id), token=captured["result_token"])
+        self.assertEqual(status, 200)
+        self.assertTrue(late["late"])
+        self.assertIsNone(self.store.get_result(self.task_id))
+        # Only a later explicit request is admitted; confirmation itself creates no task.
+        fresh_id = str(uuid4())
+        fresh = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session-1",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now,
+            new_task_id=lambda: fresh_id)
+        admitted = await fresh(ToolCallEvent("new-work", "delegate_task", {"task": "Return a synthetic answer."}), 7)
+        self.assertEqual((admitted["status"], admitted["task_id"]), ("accepted", fresh_id))
+
+    async def test_ptt_wrong_pre_send_task_id_rejects_without_releasing_slot(self):
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session-1",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        before = self.store.get_by_task_id(self.task_id)
+        result = await router(ToolCallEvent("wrong-id", "cancel_task", {"task_id": "stale-task-id"}), 1)
+        self.assertEqual((result["status"], result["code"]), ("rejected", "task_mismatch"))
+        after = self.store.get_by_task_id(self.task_id)
+        for field in ("status", "dispatch_state", "dispatch_started_at", "last_error", "stop_requested_at", "grok_submission_state"):
+            self.assertEqual(after[field], before[field], field)
+        with self.assertRaises(AdmissionBusy):
+            self.store.admit(TaskAdmissionRequest(
+                task_id=str(uuid4()), client_id=CLIENT, conversation_id="new-session", turn_id=2,
+                call_id="new-work-call", task="A separate synthetic task.", task_kind="agent",
+                backend="grok_bot", created_at=self.now, expires_at=self.now + timedelta(minutes=10),
+                executor_kind="grok_callback",
+            ))
+
+    async def test_ptt_matching_pre_send_task_id_cancels(self):
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session-1",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        result = await router(ToolCallEvent("matching-id", "cancel_task", {"task_id": self.task_id}), 1)
+        self.assertEqual((result["status"], result["code"]), ("cancelled", "grok_cancelled_before_send"))
+        self.assertEqual(self.store.get_by_task_id(self.task_id)["status"], "failed")
+
+    async def test_ptt_abandon_expiry_restart_and_presend(self):
+        def router():
+            return SlowPathToolRouter(
+                store=self.store, client_id=CLIENT, conversation_id="session-1",
+                backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+                acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now,
+            )
+        # The claimed task has not crossed the send boundary.
+        result = await router()(ToolCallEvent("cancel", "cancel_task", {}), 1)
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(result["code"], "grok_cancelled_before_send")
+
+    async def test_ptt_expired_and_new_session_cannot_confirm(self):
+        captured = {}
+        def accepted(_url, body, _bearer, _proxy, _timeout):
+            captured.update(json.loads(body))
+            return 200
+        await self.make_executor(accepted).execute(self.claimed)
+        def router():
+            return SlowPathToolRouter(
+                store=self.store, client_id=CLIENT, conversation_id="session-1",
+                backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+                acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now,
+            )
+        first = router()
+        self.assertEqual((await first(ToolCallEvent("prepare", "cancel_task", {}), 1))["status"], "confirmation_required")
+        self.assertEqual((await router()(ToolCallEvent("confirm", "cancel_task", {"confirm": True}), 2))["status"], "rejected")
+        task_id, turn_id, _expiry = first._pending_abandon
+        first._pending_abandon = (task_id, turn_id, 0.0)
+        self.assertEqual((await first(ToolCallEvent("confirm", "cancel_task", {"confirm": True}), 2))["status"], "rejected")
+        unchanged = self.store.get_by_task_id(self.task_id)
+        self.assertEqual(unchanged["status"], "running")
+        self.assertEqual(unchanged["dispatch_state"], "sent")
+        status, callback = await _asgi_call(self.callback_app, _report(self.task_id), token=captured["result_token"])
+        self.assertEqual(status, 200)
+        self.assertFalse(callback["late"])
+        self.assertEqual(self.store.get_by_task_id(self.task_id)["status"], "completed")
+
+    async def test_ptt_grok_cancel_fails_closed_on_other_backend_reservation(self):
+        other_store = SQLiteTaskStore(database_path=self.root / "other.sqlite3", max_pending_tasks=8)
+        other_id = str(uuid4())
+        other_store.admit(TaskAdmissionRequest(
+            task_id=other_id, client_id=CLIENT, conversation_id="other-session", turn_id=1,
+            call_id="other-call", task="Synthetic task.", task_kind="agent", backend="hermes",
+            created_at=self.now, expires_at=self.now + timedelta(minutes=10), executor_kind="hermes_runs",
+        ))
+        router = SlowPathToolRouter(store=other_store, client_id=CLIENT, conversation_id="session",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        result = await router(ToolCallEvent("wrong-lane", "cancel_task", {}), 1)
+        self.assertEqual((result["status"], result["code"]), ("unavailable", "active_task_unavailable"))
+        self.assertEqual(other_store.get_by_task_id(other_id)["status"], "queued")
+
+    async def test_ptt_stale_id_and_other_owner_do_not_release(self):
+        await self.make_executor(lambda *_args: 200).execute(self.claimed)
+        def router(owner):
+            return SlowPathToolRouter(store=self.store, client_id=owner, conversation_id="session",
+                backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+                acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        owner = router(CLIENT)
+        self.assertEqual((await owner(ToolCallEvent("stale", "cancel_task", {"task_id": "stale"}), 1))["code"], "task_mismatch")
+        self.assertEqual((await router("different-owner")(ToolCallEvent("other", "cancel_task", {}), 1))["status"], "not_found")
+        self.assertEqual(self.store.get_by_task_id(self.task_id)["status"], "running")
+        self.assertEqual((await owner(ToolCallEvent("prepare", "cancel_task", {}), 2))["status"], "confirmation_required")
+        # A different tool action supersedes the pending confirmation.
+        await owner(ToolCallEvent("status", "check_task_status", {}), 3)
+        self.assertEqual((await owner(ToolCallEvent("confirm", "cancel_task", {"confirm": True}), 4))["status"], "rejected")
+        self.assertEqual(self.store.get_by_task_id(self.task_id)["status"], "running")
+
+    async def test_ptt_confirmation_misrouted_to_delegate_is_never_admitted(self):
+        await self.make_executor(lambda *_args: 200).execute(self.claimed)
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        self.assertEqual((await router(ToolCallEvent("prepare", "cancel_task", {}), 1))["status"], "confirmation_required")
+        with patch.object(self.store, "admit", side_effect=AssertionError("must not admit")):
+            result = await router(ToolCallEvent("misroute", "delegate_task", {"task": "synthetic confirmation"}), 2)
+        self.assertEqual(result["code"], "pending_confirmation_requires_cancel_tool")
+        self.assertEqual(self.store.get_by_task_id(self.task_id)["status"], "running")
+
+    async def test_fake_live_two_distinct_ptt_turns(self):
+        from fast_voice.tests.test_live_bridge import FakeProvider, TOKEN
+        from relay.live_bridge import make_handler, MIN_UTTERANCE_BYTES
+        from websockets.asyncio.client import connect
+        from websockets.asyncio.server import serve
+        await self.make_executor(lambda *_args: 200).execute(self.claimed)
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        fake = FakeProvider(auto_complete=False)
+        with patch("relay.live_bridge.make_caption_normalizer", return_value=lambda value: value):
+            server = await serve(make_handler(TOKEN, lambda: fake, slow_path_tool_handler=router), "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            ws = await connect(f"ws://127.0.0.1:{port}/ws", additional_headers={"Authorization": f"Bearer {TOKEN}"})
+            async def until(predicate):
+                while True:
+                    frame = await asyncio.wait_for(ws.recv(), 3)
+                    if isinstance(frame, str) and predicate(json.loads(frame)):
+                        return
+            try:
+                for turn, args in ((1, {}), (2, {"confirm": True})):
+                    await ws.send(json.dumps({"type": "ptt_start"}))
+                    await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                    await ws.send(json.dumps({"type": "ptt_end"}))
+                    await until(lambda x: x.get("state") == "thinking")
+                    await fake.callbacks["tool"](ToolCallEvent(f"cancel-{turn}", "cancel_task", args))
+                    await fake.callbacks["tool_batch_complete"]()
+                    await fake.emit_response()
+                    await until(lambda x: x.get("type") == "turn_complete")
+                self.assertEqual([x[1]["status"] for x in fake.tool_results], ["confirmation_required", "abandoned"])
+                self.assertEqual(self.store.get_by_task_id(self.task_id)["status"], "failed")
+            finally:
+                await ws.close()
+                server.close()
+                await server.wait_closed()
+
+    async def test_superseded_prepare_cannot_leave_confirmation_armed(self):
+        import threading
+        from fast_voice.tests.test_live_bridge import FakeProvider, TOKEN
+        from relay.live_bridge import make_handler, MIN_UTTERANCE_BYTES
+        from websockets.asyncio.client import connect
+        from websockets.asyncio.server import serve
+        await self.make_executor(lambda *_args: 200).execute(self.claimed)
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        started, release = threading.Event(), threading.Event()
+        prepare = self.store.prepare_owner_cancel
+        def blocked_prepare(**kwargs):
+            started.set()
+            if not release.wait(3):
+                raise TimeoutError("fixture release timed out")
+            return prepare(**kwargs)
+        self.store.prepare_owner_cancel = blocked_prepare
+        providers = [FakeProvider(auto_complete=False), FakeProvider(auto_complete=False)]
+        with patch("relay.live_bridge.make_caption_normalizer", return_value=lambda value: value):
+            server = await serve(make_handler(TOKEN, lambda: providers.pop(0), slow_path_tool_handler=router), "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            ws = await connect(f"ws://127.0.0.1:{port}/ws", additional_headers={"Authorization": f"Bearer {TOKEN}"})
+            first, second = providers[0], providers[1]
+            async def until(predicate):
+                while True:
+                    frame = await asyncio.wait_for(ws.recv(), 3)
+                    if isinstance(frame, str) and predicate(json.loads(frame)):
+                        return
+            try:
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda x: x.get("state") == "thinking")
+                pending_call = asyncio.create_task(first.callbacks["tool"](ToolCallEvent("prepare", "cancel_task", {})))
+                self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda x: x.get("state") == "thinking")
+                release.set()
+                await pending_call
+                await second.callbacks["tool"](ToolCallEvent("confirm", "cancel_task", {"confirm": True}))
+                self.assertEqual(second.tool_results[-1][1]["status"], "rejected")
+                self.assertEqual(self.store.get_by_task_id(self.task_id)["status"], "running")
+            finally:
+                release.set()
+                await ws.close()
+                server.close()
+                await server.wait_closed()
+
+    async def test_interrupted_prepare_cannot_arm_confirmation_after_store_returns(self):
+        import threading
+        from fast_voice.tests.test_live_bridge import FakeProvider, TOKEN
+        from relay.live_bridge import make_handler, MIN_UTTERANCE_BYTES
+        from websockets.asyncio.client import connect
+        from websockets.asyncio.server import serve
+        await self.make_executor(lambda *_args: 200).execute(self.claimed)
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        started, release = threading.Event(), threading.Event()
+        prepare = self.store.prepare_owner_cancel
+        def blocked_prepare(**kwargs):
+            started.set()
+            if not release.wait(3):
+                raise TimeoutError("fixture release timed out")
+            return prepare(**kwargs)
+        self.store.prepare_owner_cancel = blocked_prepare
+        fake = FakeProvider(auto_complete=False)
+        with patch("relay.live_bridge.make_caption_normalizer", return_value=lambda value: value):
+            server = await serve(make_handler(
+                TOKEN, lambda: fake, slow_path_tool_handler=router,
+            ), "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            ws = await connect(f"ws://127.0.0.1:{port}/ws", additional_headers={"Authorization": f"Bearer {TOKEN}"})
+            async def until(predicate):
+                while True:
+                    frame = await asyncio.wait_for(ws.recv(), 3)
+                    if isinstance(frame, str) and predicate(json.loads(frame)):
+                        return
+            try:
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda item: item.get("state") == "thinking")
+                pending_call = asyncio.create_task(
+                    fake.callbacks["tool"](ToolCallEvent("prepare-interrupted", "cancel_task", {}))
+                )
+                self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                await fake.callbacks["interrupted"](object())
+                release.set()
+                await pending_call
+                self.assertIsNone(router._pending_abandon)
+                self.assertEqual(fake.tool_results, [])
+                await fake.callbacks["complete"](TurnCompleteEvent(cancelled=True))
+
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda item: item.get("state") == "thinking")
+                await fake.callbacks["tool"](
+                    ToolCallEvent("confirm-after-interrupt", "cancel_task", {"confirm": True})
+                )
+                self.assertEqual(fake.tool_results[-1][1]["code"], "confirmation_unavailable")
+                row = self.store.get_by_task_id(self.task_id)
+                self.assertEqual((row["status"], row["dispatch_state"]), ("running", "sent"))
+            finally:
+                release.set()
+                await ws.close()
+                server.close()
+                await server.wait_closed()
+
+    async def test_failed_warning_delivery_cannot_leave_confirmation_armed(self):
+        from fast_voice.tests.test_live_bridge import FakeProvider, TOKEN
+        from relay.live_bridge import make_handler, MIN_UTTERANCE_BYTES
+        from websockets.asyncio.client import connect
+        from websockets.asyncio.server import serve
+        await self.make_executor(lambda *_args: 200).execute(self.claimed)
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+
+        class FailingToolResultProvider(FakeProvider):
+            def __init__(self):
+                super().__init__(auto_complete=False)
+                self.pending_at_delivery = False
+
+            async def send_tool_result(self, call_id, result):
+                self.pending_at_delivery = router._pending_abandon is not None
+                raise ProviderError("gemini", "tool_result_unavailable", "synthetic provider failure")
+
+        providers = [FailingToolResultProvider(), FakeProvider(auto_complete=False)]
+        first, second = providers
+        with patch("relay.live_bridge.make_caption_normalizer", return_value=lambda value: value):
+            server = await serve(make_handler(
+                TOKEN, lambda: providers.pop(0), slow_path_tool_handler=router,
+            ), "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            ws = await connect(f"ws://127.0.0.1:{port}/ws", additional_headers={"Authorization": f"Bearer {TOKEN}"})
+            async def until(predicate):
+                while True:
+                    frame = await asyncio.wait_for(ws.recv(), 3)
+                    if isinstance(frame, str) and predicate(json.loads(frame)):
+                        return json.loads(frame)
+            try:
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda item: item.get("state") == "thinking")
+                await first.callbacks["tool"](ToolCallEvent("prepare-failed", "cancel_task", {}))
+                self.assertTrue(first.pending_at_delivery)
+                self.assertIsNone(router._pending_abandon)
+                await until(lambda item: item.get("state") == "idle")
+
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda item: item.get("state") == "thinking")
+                await second.callbacks["tool"](
+                    ToolCallEvent("confirm-after-failure", "cancel_task", {"confirm": True})
+                )
+                self.assertEqual(second.tool_results[-1][1]["code"], "confirmation_unavailable")
+                row = self.store.get_by_task_id(self.task_id)
+                self.assertEqual((row["status"], row["dispatch_state"]), ("running", "sent"))
+            finally:
+                await ws.close()
+                server.close()
+                await server.wait_closed()
+
+    async def test_warning_ack_timeout_clears_pending_abandon(self):
+        from fast_voice.tests.test_live_bridge import FakeProvider, TOKEN
+        from relay.live_bridge import make_handler, MIN_UTTERANCE_BYTES
+        from websockets.asyncio.client import connect
+        from websockets.asyncio.server import serve
+        await self.make_executor(lambda *_args: 200).execute(self.claimed)
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        providers = [FakeProvider(auto_complete=False), FakeProvider(auto_complete=False)]
+        first, second = providers
+        with patch("relay.live_bridge.make_caption_normalizer", return_value=lambda value: value):
+            server = await serve(make_handler(
+                TOKEN, lambda: providers.pop(0), slow_path_tool_handler=router,
+                post_tool_ack_timeout_seconds=0.05, post_tool_ack_max_duration_seconds=0.1,
+            ), "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            ws = await connect(f"ws://127.0.0.1:{port}/ws", additional_headers={"Authorization": f"Bearer {TOKEN}"})
+            async def until(predicate):
+                while True:
+                    frame = await asyncio.wait_for(ws.recv(), 3)
+                    if isinstance(frame, str) and predicate(json.loads(frame)):
+                        return json.loads(frame)
+            try:
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda item: item.get("state") == "thinking")
+                await first.callbacks["tool"](ToolCallEvent("prepare-timeout", "cancel_task", {}))
+                self.assertEqual(first.tool_results[-1][1]["status"], "confirmation_required")
+                self.assertIsNotNone(router._pending_abandon)
+                await until(lambda item: item.get("state") == "idle")
+                self.assertIsNone(router._pending_abandon)
+
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda item: item.get("state") == "thinking")
+                await second.callbacks["tool"](
+                    ToolCallEvent("confirm-after-timeout", "cancel_task", {"confirm": True})
+                )
+                self.assertEqual(second.tool_results[-1][1]["code"], "confirmation_unavailable")
+                row = self.store.get_by_task_id(self.task_id)
+                self.assertEqual((row["status"], row["dispatch_state"]), ("running", "sent"))
+            finally:
+                await ws.close()
+                server.close()
+                await server.wait_closed()
+
+    async def test_cancelled_warning_turn_clears_pending_abandon(self):
+        from fast_voice.tests.test_live_bridge import FakeProvider, TOKEN
+        from relay.live_bridge import make_handler, MIN_UTTERANCE_BYTES
+        from websockets.asyncio.client import connect
+        from websockets.asyncio.server import serve
+        await self.make_executor(lambda *_args: 200).execute(self.claimed)
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="session",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now)
+        fake = FakeProvider(auto_complete=False)
+        with patch("relay.live_bridge.make_caption_normalizer", return_value=lambda value: value):
+            server = await serve(make_handler(
+                TOKEN, lambda: fake, slow_path_tool_handler=router,
+            ), "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            ws = await connect(f"ws://127.0.0.1:{port}/ws", additional_headers={"Authorization": f"Bearer {TOKEN}"})
+            async def until(predicate):
+                while True:
+                    frame = await asyncio.wait_for(ws.recv(), 3)
+                    if isinstance(frame, str) and predicate(json.loads(frame)):
+                        return
+            try:
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda item: item.get("state") == "thinking")
+                await fake.callbacks["tool"](ToolCallEvent("prepare-cancelled", "cancel_task", {}))
+                self.assertEqual(fake.tool_results[-1][1]["status"], "confirmation_required")
+                self.assertIsNotNone(router._pending_abandon)
+                await fake.callbacks["complete"](TurnCompleteEvent(cancelled=True))
+                self.assertIsNone(router._pending_abandon)
+
+                await ws.send(json.dumps({"type": "ptt_start"}))
+                await ws.send(bytes([132, 3]) * (MIN_UTTERANCE_BYTES // 2))
+                await ws.send(json.dumps({"type": "ptt_end"}))
+                await until(lambda item: item.get("state") == "thinking")
+                await fake.callbacks["tool"](
+                    ToolCallEvent("confirm-after-cancel", "cancel_task", {"confirm": True})
+                )
+                self.assertEqual(fake.tool_results[-1][1]["code"], "confirmation_unavailable")
+                row = self.store.get_by_task_id(self.task_id)
+                self.assertEqual((row["status"], row["dispatch_state"]), ("running", "sent"))
+            finally:
+                await ws.close()
+                server.close()
+                await server.wait_closed()
+
+    async def test_ptt_abandon_callback_wins(self):
+        captured = {}
+        def accepted(_url, body, _bearer, _proxy, _timeout):
+            captured.update(json.loads(body))
+            return 200
+        await self.make_executor(accepted).execute(self.claimed)
+        router = SlowPathToolRouter(
+            store=self.store, client_id=CLIENT, conversation_id="session-1",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=3, executor_kind="grok_callback", now=lambda: self.now,
+        )
+        prepared = await router(ToolCallEvent("prepare", "cancel_task", {}), 1)
+        self.assertEqual(prepared["status"], "confirmation_required")
+        status, _ = await _asgi_call(self.callback_app, _report(self.task_id), token=captured["result_token"])
+        self.assertEqual(status, 200)
+        self.assertTrue(self.store.inbox_ready(client_id=CLIENT))
+        result = await router(ToolCallEvent("confirm", "cancel_task", {"confirm": True}), 2)
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNotNone(self.store.get_result(self.task_id))
+        self.assertTrue(self.store.inbox_ready(client_id=CLIENT))
+        self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "pending")
 
     async def test_cancel_racing_webhook_ack_stays_uncertain(self):
         def accepted_after_owner_cancel(_url, _body, _bearer, _proxy, _timeout):

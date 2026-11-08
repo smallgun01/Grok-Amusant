@@ -1621,6 +1621,77 @@ class SQLiteTaskStore:
     def mark_uncertain(self, task_id: str, *, code: str = "acp_result_unconfirmed") -> None:
         self._finish(task_id, task_status="uncertain", outbox_state="uncertain", error=_sanitize_error(code))
 
+    def prepare_owner_cancel(
+        self, *, client_id: str, now: datetime, requested_task_id: str | None = None
+    ) -> CancelReceipt:
+        """Atomically resolve the Owner task and cancel only pre-send Grok work."""
+        if not isinstance(client_id, str) or not _ID_RE.fullmatch(client_id):
+            raise AdmissionUnavailable("invalid_identity")
+        if requested_task_id is not None and (
+            not isinstance(requested_task_id, str) or not _ID_RE.fullmatch(requested_task_id)
+        ):
+            raise AdmissionUnavailable("invalid_task_id")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT t.task_id,t.status,t.executor_kind,t.grok_callback_receipt_id,"
+                "o.state,o.dispatch_started_at FROM slow_tasks t "
+                "JOIN dispatch_outbox o USING(task_id) WHERE t.client_id=? AND ("
+                "t.status IN ('running','uncertain') OR (t.status='queued' AND ("
+                "t.backend_run_id IS NOT NULL OR o.dispatch_started_at IS NOT NULL OR t.expires_at>?))) "
+                "ORDER BY t.created_at LIMIT 2",
+                (client_id, _utc_iso(now)),
+            ).fetchall()
+            if len(rows) > 1:
+                connection.execute("ROLLBACK")
+                raise AdmissionUnavailable("ambiguous_active_task")
+            if not rows:
+                connection.execute("COMMIT")
+                return CancelReceipt("", "not_found", "no_active_task")
+            task_id, status, executor, callback_id, outbox_state, dispatch_started = rows[0]
+            if requested_task_id is not None and requested_task_id != task_id:
+                connection.execute("COMMIT")
+                return CancelReceipt(requested_task_id, "rejected", "task_mismatch")
+            if executor != "grok_callback":
+                connection.execute("ROLLBACK")
+                raise AdmissionUnavailable("non_grok_active_task")
+            if callback_id is not None or status in {"completed", "failed"}:
+                connection.execute("COMMIT")
+                return CancelReceipt(task_id, status, "already_terminal")
+            if dispatch_started is None and status in {"queued", "running"} and outbox_state in {"pending", "claimed"}:
+                code = "grok_cancelled_before_send"
+                changed = connection.execute(
+                    "UPDATE dispatch_outbox SET state='failed',claimed_until=NULL,last_error=? "
+                    "WHERE task_id=? AND state IN ('pending','claimed') AND dispatch_started_at IS NULL",
+                    (code, task_id),
+                ).rowcount
+                if changed != 1:
+                    connection.execute("ROLLBACK")
+                    raise AdmissionUnavailable("cancel_state_unavailable")
+                connection.execute(
+                    "UPDATE slow_tasks SET status='failed',grok_submission_state='rejected',"
+                    "stop_requested_at=?,stop_reason='owner_cancel',next_poll_at=NULL "
+                    "WHERE task_id=? AND status IN ('queued','running') AND grok_callback_receipt_id IS NULL",
+                    (_utc_iso(now), task_id),
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO task_inbox(task_id,delivery_state,updated_at) VALUES(?,?,?)",
+                    (task_id, "pending", _utc_iso(now)),
+                )
+                connection.execute("COMMIT")
+                return CancelReceipt(task_id, "cancelled", code)
+            connection.execute("COMMIT")
+            return CancelReceipt(task_id, "confirmation_required", "grok_abandon_confirmation_required")
+        except sqlite3.Error:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise AdmissionUnavailable("task_store_unavailable") from None
+        finally:
+            connection.close()
+
     def request_cancel(self, *, client_id: str, task_id: str, now: datetime) -> CancelReceipt:
         if not isinstance(client_id, str) or not _ID_RE.fullmatch(client_id):
             raise AdmissionUnavailable("invalid_identity")
@@ -1879,6 +1950,9 @@ class SQLiteTaskStore:
             status, saved_run_id, stop_reason, outbox_state = row[:4]
             executor_kind, dispatch_started_at, callback_receipt_id = row[4:7]
             if executor_kind == "grok_callback":
+                if terminal_state == "abandoned" and callback_receipt_id is not None:
+                    connection.execute("COMMIT")
+                    return CancelReceipt(task_id, status, "callback_won_abandon_race")
                 if (
                     terminal_state != "abandoned"
                     or verified_run_id is not None

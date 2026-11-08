@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import math
 import re
+import time
 from typing import Protocol
 from uuid import uuid4
 
@@ -117,12 +118,20 @@ class SlowPathToolRouter:
         self._on_admitted = on_admitted
         self._admission_available = admission_available
         self._on_inbox_change = on_inbox_change
+        self._pending_abandon = None
+        self._abandon_lock = asyncio.Lock()
 
     async def __call__(self, event: ToolCallEvent, turn_id: int) -> Mapping[str, JSONValue]:
+        if event.name == CANCEL_TOOL_NAME:
+            if self._executor_kind == "grok_callback":
+                return await self._grok_cancel(event, turn_id)
+            return await self._cancel(event)
+        pending = self._pending_abandon
+        self._pending_abandon = None
+        if pending is not None and event.name == TOOL_NAME and turn_id == pending[1] + 1:
+            return {"status": "rejected", "code": "pending_confirmation_requires_cancel_tool"}
         if event.name == INBOX_TOOL_NAME:
             return await self._lookup(event)
-        if event.name == CANCEL_TOOL_NAME:
-            return await self._cancel(event)
         if event.name != TOOL_NAME:
             return {"status": "rejected", "code": "unsupported_tool"}
         if not self._admission_available:
@@ -188,6 +197,86 @@ class SlowPathToolRouter:
             "task_id": receipt.task_id,
             "duplicate": receipt.duplicate,
         }
+
+    async def _grok_cancel(self, event: ToolCallEvent, turn_id: int) -> Mapping[str, JSONValue]:
+        args = event.arguments
+        if (not isinstance(args, Mapping) or set(args) - {"task_id", "confirm"}
+                or ("task_id" in args and not isinstance(args["task_id"], str))
+                or ("confirm" in args and type(args["confirm"]) is not bool)
+                or type(turn_id) is not int or turn_id <= 0):
+            self._pending_abandon = None
+            return {"status": "rejected", "code": "invalid_arguments"}
+        async with self._abandon_lock:
+            pending = self._pending_abandon
+            if args.get("confirm", False):
+                # Consume before any await, including on invalid or duplicate confirmations.
+                self._pending_abandon = None
+                if (pending is None or time.monotonic() >= pending[2]
+                        or turn_id != pending[1] + 1
+                        or ("task_id" in args and args["task_id"] != pending[0])):
+                    return {"status": "rejected", "code": "confirmation_unavailable"}
+                task_id = pending[0]
+                try:
+                    receipt = await asyncio.wait_for(asyncio.to_thread(
+                        self._store.operator_reconcile_uncertain,
+                        client_id=self._client_id, task_id=task_id,
+                        terminal_state="abandoned", verified_run_id=None,
+                        operator_id="ptt-owner", evidence_ref="ptt-local-abandon:" + str(uuid4()),
+                        now=self._now(), revoke_callback_token=False,
+                    ), self._timeout)
+                except AdmissionUnavailable:
+                    return {"status": "unknown", "code": "abandon_state_changed"}
+                except Exception:
+                    return {"status": "unknown", "code": "abandon_unconfirmed"}
+                if not isinstance(receipt, CancelReceipt):
+                    return {"status": "unknown", "code": "abandon_unconfirmed"}
+                if receipt.code == "callback_won_abandon_race":
+                    return {"status": receipt.status, "task_id": task_id,
+                            "code": receipt.code,
+                            "message": "已收到任務回覆；可使用按鈕朗讀，不會放棄或清除未讀結果。"}
+                if receipt.status != "abandoned":
+                    return {"status": "unknown", "code": "abandon_unconfirmed"}
+                if self._on_inbox_change is not None:
+                    try:
+                        self._on_inbox_change(self._client_id)
+                    except Exception:
+                        pass
+                return {"status": "abandoned", "task_id": task_id,
+                        "message": "已放棄等待，可以交辦新工作了。Grok 可能仍在執行。"}
+            self._pending_abandon = None
+            prepare = getattr(self._store, "prepare_owner_cancel", None)
+            if not callable(prepare):
+                return {"status": "unavailable", "code": "abandon_unavailable"}
+            try:
+                receipt = await asyncio.wait_for(asyncio.to_thread(
+                    prepare, client_id=self._client_id, now=self._now(),
+                    requested_task_id=args.get("task_id"),
+                ), self._timeout)
+            except Exception:
+                return {"status": "unavailable", "code": "active_task_unavailable"}
+            if not isinstance(receipt, CancelReceipt):
+                return {"status": "unknown", "code": "invalid_cancel_result"}
+            if receipt.status == "confirmation_required":
+                self._pending_abandon = (receipt.task_id, turn_id, time.monotonic() + 60.0)
+                return {"status": "confirmation_required", "task_id": receipt.task_id,
+                        "message": "確定放棄嗎？Grok 可能繼續執行唷。"}
+            result: dict[str, JSONValue] = {
+                "status": receipt.status, "code": receipt.code,
+            }
+            if receipt.task_id:
+                result["task_id"] = receipt.task_id
+            if receipt.status == "cancelled":
+                result["message"] = "任務尚未送出，已在本機取消。"
+            elif receipt.status == "not_found":
+                result["message"] = "目前沒有需要取消的任務。"
+            elif receipt.status in {"completed", "failed"}:
+                result["message"] = "任務已有結果；可使用按鈕朗讀。"
+            return result
+
+    def invalidate_pending_abandon(self, turn_id: int) -> None:
+        pending = self._pending_abandon
+        if pending is not None and pending[1] == turn_id:
+            self._pending_abandon = None
 
     async def _cancel(self, event: ToolCallEvent) -> Mapping[str, JSONValue]:
         arguments = event.arguments
@@ -451,7 +540,7 @@ def build_check_task_status_tool(sdk_types, *, executor_kind: str = "openab_acp"
 def build_cancel_task_tool(sdk_types, *, executor_kind: str = "openab_acp"):
     if executor_kind == "grok_callback":
         description = (
-            "Request owner-only cancellation of a Grok slow task. Before the Routine Webhook send boundary, Relay cancels locally. After send begins, Grok has no remote Stop control; the task may still run and stays busy until a valid Callback or an explicit audited Owner Abandon/Reconcile. This never claims remote cancellation."
+            "Use for an owner request to cancel the current Grok task, including the subsequent explicit confirmation '確定放棄'. Omit task_id if unknown. First call without confirm; if confirmation_required, speak its warning and wait for a separate PTT turn. Only when the owner explicitly confirms in that later turn call with confirm=true. There is no remote Stop; local abandon only releases the slot and never claims Grok stopped."
         )
     elif executor_kind == "hermes_runs":
         description = (
@@ -471,8 +560,9 @@ def build_cancel_task_tool(sdk_types, *, executor_kind: str = "openab_acp"):
                     type="STRING",
                     description="The task_id returned by delegate_task or check_task_status.",
                 ),
+                **({"confirm": sdk_types.Schema(type="BOOLEAN", description="True only for the owner's explicit confirmation on a later turn.")} if executor_kind == "grok_callback" else {}),
             },
-            required=["task_id"],
+            **({} if executor_kind == "grok_callback" else {"required": ["task_id"]}),
         ),
     )
 
