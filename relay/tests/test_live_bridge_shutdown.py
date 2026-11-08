@@ -262,7 +262,11 @@ class GrokBridgeSigtermProcessTests(unittest.TestCase):
                     deadline = time.monotonic() + 10
                     while time.monotonic() < deadline and process.poll() is None:
                         try:
-                            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                            with websocket_connect(
+                                f"ws://127.0.0.1:{port}/listener-probe",
+                                additional_headers={"Authorization": "Bearer synthetic-device-token"},
+                                open_timeout=0.5, close_timeout=0.5, proxy=None,
+                            ):
                                 break
                         except OSError:
                             time.sleep(0.05)
