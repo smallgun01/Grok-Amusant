@@ -17,6 +17,16 @@ flowchart LR
 
 Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。本專案為實驗性 Public Alpha 原始碼，尚未核准正式生產部署。
 
+## 使用硬體
+
+Jellii 使用 **M5Stack M5StickS3（SKU K150）**，配備 ESP32-S3、8 MB Flash、8 MB PSRAM、1.14 吋 135 × 240 LCD、麥克風、喇叭、2.4 GHz Wi-Fi、藍牙低功耗（BLE）及 250 mAh 電池。
+
+![在 M5StickS3 上運行的 Jellii](docs/images/jellii-sticks3.jpg)
+
+按住正面 **A 鍵**說話，放開後送出；側面 **B 鍵**可喚醒螢幕及朗讀未讀 Inbox 結果。在 Idle／Offline 狀態長按 B 鍵五秒可進入 Wi-Fi 配網；螢幕關閉時須先喚醒。
+
+[M5Stack 官方產品頁](https://shop.m5stack.com/products/m5sticks3-esp32s3-mini-iot-dev-kit) · [官方硬體文件](https://docs.m5stack.com/en/core/StickS3)
+
 ## Build Your Own Jellii
 
 **第一次自己做 Jellii？請走 [Local-first 快速建置](docs/local-first.zh-TW.md)：Linux 電腦＋StickS3＋Gemini API Key → Docker → 刷機 → BLE Wi-Fi → 第一次 FAST 開口說話。** 不需要先準備網域、公開 Port 或雲端主機。FAST 成功後再加 Grok Callback，或依照[進階 ARM64／OCI 部署](docs/build-your-own-jellii.zh-TW.md)搬到雲端。
