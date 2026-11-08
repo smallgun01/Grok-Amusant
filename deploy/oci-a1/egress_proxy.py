@@ -125,7 +125,7 @@ def parse_connect_target(request_line: bytes) -> tuple[str, int]:
             raise ProxyRequestError("invalid CONNECT authority")
     if not host or any(char in host for char in "/\\?#@%\r\n\t "):
         raise ProxyRequestError("invalid CONNECT host")
-    if not tail.isascii() or not tail.isdigit():
+    if len(tail) > 5 or not tail.isascii() or not tail.isdigit():
         raise ProxyRequestError("invalid CONNECT port")
     port = int(tail)
     if port != CONNECT_PORT:

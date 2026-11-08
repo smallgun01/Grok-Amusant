@@ -31,6 +31,16 @@ class Writer:
     async def wait_closed(self): pass
 
 class ProxyPolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_overlong_numeric_port_returns_controlled_400(self):
+        reader=asyncio.StreamReader()
+        reader.feed_data(b"CONNECT allowed.example:" + b"9" * 5000 + b" HTTP/1.1\r\nHost: allowed.example\r\n\r\n")
+        reader.feed_eof()
+        writer=Writer(); resolver=unittest.mock.Mock(); connector=AsyncMock()
+        await proxy.handle_connect(reader, writer, allowed_peers=frozenset({ipaddress.ip_address("127.0.0.1")}), allowed_hosts=frozenset({"allowed.example"}), resolver=resolver, connect_upstream=connector)
+        self.assertIn(b" 400 ", writer.data)
+        self.assertTrue(writer.closed)
+        resolver.assert_not_called(); connector.assert_not_called()
+
     async def test_denied_host_never_resolves_or_connects(self):
         reader=asyncio.StreamReader(); reader.feed_data(b"CONNECT denied.example:443 HTTP/1.1\r\nHost: denied.example\r\n\r\n"); reader.feed_eof()
         writer=Writer(); resolver=unittest.mock.Mock(); connector=AsyncMock()
