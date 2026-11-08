@@ -154,6 +154,8 @@ jobs:
           python-version: '3.13'
       - run: python -m pip install uv==0.11.25
       - run: uv sync --locked --extra hardware-opus --group dev
+      - name: Require TLS-PSK integration prerequisites
+        run: uv run --locked python -c "import ssl, av, numpy; assert callable(getattr(ssl.SSLContext, 'set_psk_server_callback', None)) and callable(getattr(ssl.SSLContext, 'set_psk_client_callback', None))"
       - name: Run supported Relay / Fast Voice regressions
         run: >-
           uv run --locked python -m unittest
@@ -168,18 +170,18 @@ jobs:
           fast_voice.tests.test_contract
           relay.tests.test_device_protocol
           relay.tests.test_device_tls_psk
-          relay.tests.test_callback_listener -v
+          relay.tests.test_callback_listener
+          relay.tests.test_tls_handshake_timeout
+          relay.tests.test_live_bridge_shutdown.GrokBridgeSigtermProcessTests
+          relay.tests.test_live_bridge_shutdown.ActiveGrokDispatcherShutdownTests
+          relay.tests.psk_wss_integration -v
       - name: Preflash and USB Wi-Fi setup tests
         run: |
           uv run --locked python -m unittest discover -s patches/sticks3-baseline -p test_preflash.py -v
           uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1/tests -p test_provision_wifi.py -v
           uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1.5/tests -p test_provision_wifi.py -v
-      - name: Self-host private configuration tests (when present)
-        shell: bash
-        run: |
-          if [[ -f deploy/selfhost/test_prepare.py ]]; then
-            uv run --locked python -m unittest discover -s deploy/selfhost -p test_prepare.py -v
-          fi
+      - name: Self-host configuration and health regressions
+        run: uv run --locked python -m unittest discover -s deploy/selfhost -p "test_*.py" -v
 
   firmware:
     needs: scope

@@ -315,11 +315,8 @@ class PskWssIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             environ = {
                 "AMUSANT_CLIENT_ID": "h03-owner",
-                "AMUSANT_BACKEND_ID": "openab",
-                "AMUSANT_SLOW_EXECUTOR": "openab_acp",  # explicit configured legacy fixture
-                "AMUSANT_ACP_URL": "ws://127.0.0.1:9/acp",
-                "AMUSANT_ACP_AUTH_KEY": "offline-test-acp-key-123",
-                "AMUSANT_ACP_CWD": "/workspace",
+                "AMUSANT_BACKEND_ID": "grok_bot",
+                "AMUSANT_SLOW_EXECUTOR": "grok_callback",
                 "AMUSANT_TASK_DB": f"{temp_dir}/task-ledger.sqlite3",
                 "AMUSANT_TASK_STORE": "sqlite",
                 "AMUSANT_DEFAULT_TASK_KIND": "research",
@@ -330,7 +327,7 @@ class PskWssIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 "GEMINI_API_KEY": "offline-test-key",
             }
             fake = FakeProvider(auto_complete=False)
-            with patch("relay.application.build_live_provider", return_value=fake):
+            with patch("relay.application.build_live_provider", return_value=fake), patch("relay.application.load_grok_callback_executor", return_value=object()):
                 handler, dispatcher, store = build_supported_relay_runtime(
                     expected_device_token=TOKEN,
                     environ=environ,
@@ -339,7 +336,7 @@ class PskWssIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     post_tool_ack_timeout_seconds=0.2,
                     post_tool_ack_max_duration_seconds=1.0,
                 )
-                self.assertIsNotNone(dispatcher)  # configured, but not started; no ACP/AWS call.
+                self.assertIsNotNone(dispatcher)  # configured but not started; no provider call.
                 server = await serve(
                     adapt_device_handler(handler, hardware_mode=True),
                     "127.0.0.1",
@@ -411,7 +408,7 @@ class PskWssIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(receipt["task_id"], row["task_id"])
             self.assertEqual(row["status"], "queued")
             self.assertEqual(row["task_kind"], "research")
-            self.assertEqual(row["backend"], "openab")
+            self.assertEqual(row["backend"], "grok_bot")
             self.assertEqual(row["dispatch_state"], "pending")
             self.assertIsNone(store.get_by_call(
                 client_id="untrusted-device-label",

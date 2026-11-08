@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
 
-from relay.task_store import AdmissionReceipt, SQLiteTaskStore, TaskAdmissionRequest
+from relay.task_store import AdmissionReceipt, SQLiteTaskStore, TaskAdmissionRequest, SCHEMA_VERSION
 
 NOW = datetime(2026, 10, 25, 8, 0, tzinfo=timezone.utc)
 ACTIVE_TASK_ID = "4db5aabc-284a-4a01-8a6d-5cddcc7934f1"
@@ -143,6 +144,30 @@ def _insert_v8_task(connection, request, *, status, run_state=None):
 
 
 class TaskStoreMigrationTests(unittest.TestCase):
+    def test_future_schema_rejected_without_modifying_database(self):
+        for has_expected_table in (False, True):
+            with self.subTest(has_expected_table=has_expected_table), tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "future.sqlite3"
+                with closing(sqlite3.connect(path)) as connection:
+                    connection.execute("CREATE TABLE sentinel (value TEXT NOT NULL)")
+                    connection.execute("INSERT INTO sentinel VALUES (?)", ("synthetic-value",))
+                    if has_expected_table:
+                        connection.execute("CREATE TABLE slow_tasks (future_column TEXT)")
+                        connection.execute("INSERT INTO slow_tasks VALUES (?)", ("future-value",))
+                    connection.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
+                    connection.commit()
+                before = path.read_bytes()
+                with self.assertRaisesRegex(ValueError, "^task_store_future_schema$"):
+                    SQLiteTaskStore(database_path=path, max_pending_tasks=8)
+                self.assertEqual(path.read_bytes(), before)
+                with closing(sqlite3.connect(path)) as connection:
+                    self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION + 1)
+                    self.assertEqual(connection.execute("SELECT value FROM sentinel").fetchall(), [("synthetic-value",)])
+                    names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                    self.assertEqual("slow_tasks" in names, has_expected_table)
+                    if has_expected_table:
+                        self.assertEqual(connection.execute("SELECT future_column FROM slow_tasks").fetchall(), [("future-value",)])
+
     def test_v8_migration_preserves_rows_fingerprints_run_state_and_replay(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "legacy-v8.sqlite3"
