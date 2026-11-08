@@ -226,5 +226,67 @@ class LiveBridgeSigtermProcessTests(unittest.TestCase):
                 hermes_thread.join(timeout=2)
 
 
+@unittest.skipUnless(os.name == "posix", "SIGTERM process behavior is exercised on POSIX CI")
+class GrokBridgeSigtermProcessTests(unittest.TestCase):
+    def test_shutdown_and_restart_preserve_queued_task_without_provider_calls(self):
+        with tempfile.TemporaryDirectory(prefix="amusant-grok-shutdown-") as temp_dir:
+            db_path = Path(temp_dir) / "tasks.sqlite3"
+            task_id = str(uuid4())
+            now = datetime.now(timezone.utc)
+            store = SQLiteTaskStore(database_path=db_path, max_pending_tasks=8)
+            store.admit(TaskAdmissionRequest(
+                task_id=task_id, client_id="synthetic-owner", conversation_id="synthetic-conversation",
+                turn_id=1, call_id="synthetic-call", task="synthetic task", task_kind="agent",
+                backend="grok_bot", created_at=now, expires_at=now + timedelta(minutes=5),
+                executor_kind="grok_callback",
+            ))
+            env = dict(os.environ)
+            env.update({
+                "AMUSANT_DEVICE_TOKEN": "synthetic-device-token",
+                "AMUSANT_LIVE_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-unused-key",
+                "AMUSANT_CLIENT_ID": "synthetic-owner", "AMUSANT_BACKEND_ID": "grok_bot",
+                "AMUSANT_TASK_STORE": "sqlite", "AMUSANT_TASK_DB": str(db_path),
+                "AMUSANT_SLOW_EXECUTOR": "grok_callback",
+                "AMUSANT_GROK_CALLBACK_URL": "https://callback.example.invalid/callback/results",
+                "AMUSANT_RELAY_SHUTDOWN_GRACE_SECONDS": "0.2",
+            })
+            for _ in range(2):
+                with socket.socket() as listener:
+                    listener.bind(("127.0.0.1", 0))
+                    port = listener.getsockname()[1]
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "relay.live_bridge", "--host", "127.0.0.1", "--port", str(port)],
+                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                try:
+                    deadline = time.monotonic() + 10
+                    while time.monotonic() < deadline and process.poll() is None:
+                        try:
+                            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                                break
+                        except OSError:
+                            time.sleep(0.05)
+                    else:
+                        self.fail("synthetic Relay listener did not start")
+                    started = time.monotonic()
+                    process.send_signal(signal.SIGTERM)
+                    stdout, stderr = process.communicate(timeout=6)
+                    self.assertEqual(process.returncode, 0, msg=f"stdout={stdout}\nstderr={stderr}")
+                    self.assertLess(time.monotonic() - started, 5)
+                    self.assertNotIn("Traceback", stderr)
+                    with self.assertRaises(OSError):
+                        socket.create_connection(("127.0.0.1", port), timeout=0.2)
+                    reopened = SQLiteTaskStore(database_path=db_path, max_pending_tasks=8)
+                    task = reopened.get_by_task_id(task_id)
+                    self.assertEqual(task["task_id"], task_id)
+                    self.assertEqual(task["status"], "queued")
+                    self.assertEqual(task["dispatch_state"], "pending")
+                    self.assertIsNone(task["backend_run_id"])
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+
+
 if __name__ == "__main__":
     unittest.main()

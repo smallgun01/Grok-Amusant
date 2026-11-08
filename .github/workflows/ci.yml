@@ -172,7 +172,7 @@ jobs:
           relay.tests.test_device_tls_psk
           relay.tests.test_callback_listener
           relay.tests.test_tls_handshake_timeout
-          relay.tests.test_live_bridge_shutdown
+          relay.tests.test_live_bridge_shutdown.GrokBridgeSigtermProcessTests
           relay.tests.psk_wss_integration -v
       - name: Preflash and USB Wi-Fi setup tests
         run: |
