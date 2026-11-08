@@ -427,6 +427,11 @@ def make_handler(
                 and response_turn is turn
             )
 
+        def invalidate_pending_abandon(turn: Turn) -> None:
+            invalidate = getattr(session_slow_path_tool_handler, "invalidate_pending_abandon", None)
+            if callable(invalidate):
+                invalidate(turn.turn_id)
+
         async def send_owned_control(turn: Turn, epoch: int, payload: dict[str, Any]) -> bool:
             async with send_lock:
                 if not owns_response(turn, epoch):
@@ -522,6 +527,8 @@ def make_handler(
             turn: Turn, epoch: int, *, cancelled: bool = False
         ) -> bool:
             nonlocal response_turn
+            if cancelled or turn.response_interrupted:
+                invalidate_pending_abandon(turn)
             device_send_failed = False
             async with send_lock:
                 if not owns_response(turn, epoch):
@@ -552,6 +559,7 @@ def make_handler(
                 except ConnectionClosed:
                     return False
             if device_send_failed:
+                invalidate_pending_abandon(turn)
                 defer_provider_retire(
                     detach_provider(epoch, turn_id=turn.turn_id),
                     phase="provider_retire_after_send_failure",
@@ -591,6 +599,7 @@ def make_handler(
             controls: list[dict[str, Any]],
         ) -> bool:
             nonlocal response_turn
+            invalidate_pending_abandon(turn)
             async with send_lock:
                 if active_turn is not turn or turn.invalidated:
                     return False
@@ -882,7 +891,7 @@ def make_handler(
                     elif tool_kind == "cancel":
                         valid_statuses = {
                             "stopping", "cancelled", "completed", "failed", "uncertain", "timed_out",
-                            "not_found", "rejected", "unavailable", "unknown",
+                            "confirmation_required", "abandoned", "not_found", "rejected", "unavailable", "unknown",
                         }
                     else:
                         valid_statuses = {"accepted", "busy", "rejected", "unavailable", "unknown"}
@@ -895,7 +904,8 @@ def make_handler(
                     # the slow router, so Inbox data cannot trigger another task.
                     result = {"status": "rejected", "code": "tool_action_already_used"}
 
-                if not owns_response(turn, epoch):
+                if not owns_response(turn, epoch) or turn.response_interrupted:
+                    invalidate_pending_abandon(turn)
                     return
                 try:
                     await instance.send_tool_result(event.call_id, result)
@@ -1058,6 +1068,7 @@ def make_handler(
                     if not owns_response(turn, epoch):
                         return
                     turn.response_interrupted = True
+                    invalidate_pending_abandon(turn)
                     try:
                         await ws.send(json.dumps({"type": "interrupted"}))
                     except ConnectionClosed:
@@ -1251,8 +1262,10 @@ def make_handler(
                     if previous is not None and previous.ptt_open:
                         continue
                     if previous is not None and previous.response_pending and not previous.invalidated:
+                        invalidate_pending_abandon(previous)
                         await supersede_turn(previous)
                     elif previous is not None and previous.state == TurnState.FAILED:
+                        invalidate_pending_abandon(previous)
                         await retire_provider(previous.provider_epoch)
                     next_turn_id += 1
                     active_turn = Turn(turn_id=next_turn_id)
@@ -1322,6 +1335,7 @@ def make_handler(
                 inbox_badges.unregister(badge_key)
             disconnected_turn = active_turn
             if disconnected_turn is not None:
+                invalidate_pending_abandon(disconnected_turn)
                 cancel_post_tool_timeout(disconnected_turn)
                 disconnected_turn.invalidated = True
                 disconnected_turn.response_pending = False
