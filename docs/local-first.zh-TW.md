@@ -54,6 +54,8 @@ sudo chmod 0700 "$HOME"/amusant-private/data/relay
 
 上述指令只用於剛才新產生的目錄，**不要修改** `secrets.h` 或 `private.env`。Rootless Docker 有 UID 映射差異，須另行核對。
 
+啟動 Compose 前，請在私有 `private.env` 的 `EGRESS_PROXY_ALLOWED_HOSTS` 填入已確認的精確出站 DNS 名稱，詳見[出站 Host 政策](configuration.zh-TW.md)。工具產生的空值會故意阻止啟動，直到完成設定。
+
 ## 3. 在本地 Build／啟動容器
 
 ```sh

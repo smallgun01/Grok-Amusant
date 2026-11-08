@@ -50,6 +50,8 @@ sudo chmod 0700 "$HOME"/amusant-private/data/relay
 
 勿將上述 `chown` 套用到 Firmware `secrets.h` 或 `private.env`。Docker Compose 的 File-backed Secret 並不保證重新映射 UID／GID；若啟動失敗，要看**容器內**檔案的 Owner／Mode，不得取消 Relay 的 Fail-closed 檢查。Rootless Docker／NAS 等環境可能需要不同作法。
 
+啟動 Compose 前，請在私有 `private.env` 的 `EGRESS_PROXY_ALLOWED_HOSTS` 設定已確認的精確出站 DNS 名稱，詳見[出站 Host 政策](configuration.zh-TW.md)。空值會故意阻止啟動。
+
 ## 3. Build / Start Relay 與 Egress Proxy
 
 ```sh

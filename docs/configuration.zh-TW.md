@@ -7,3 +7,15 @@ Compose 範例選用 `grok_callback`、SQLite 與獨立 Egress Proxy。Relay 使
 正式部署需另行設計私人裝置 ingress、具驗證機制的 callback ingress、Proxy 和 Owner 管理的憑證，並驗證完整路由與 Provider 設定。未經明確部署授權，不要讓範例連接真實服務。
 
 韌體設定保存在獨立的 Kai 建置目錄。CI 的合成設定只供編譯，刻意無法用於真實部署；詳見[韌體說明](../patches/amusant-sticks3-base-v0.12.0.md)。
+
+## 出站 Host 政策
+
+在私有 Compose 環境中設定 `EGRESS_PROXY_ALLOWED_HOSTS`，以逗號分隔部署實際需要的精確 DNS 名稱。未設定、空白、格式錯誤、萬用字元或 IP literal 均 fail-closed；CONNECT 名稱正規化後精確比對，每次 DNS 結果也必須全部為公開位址。固定版本 `google-genai` SDK 的 API-key Live 預設位址為 `generativelanguage.googleapis.com`，但輔助端點與 Owner 自行設定的 Grok Routine Host 仍須依實際部署確認；此資訊不是完整白名單。真實 Routine URL 不得放進 repository。
+
+兩種 Provider 共用同一 Relay 程序與網路身分，這項政策不能隔離其憑證。CONNECT Host 比對不檢查加密的 TLS SNI，也無法區分共用允許 IP 的其他服務。部署前須私下確認所需 Host，並由 Owner 核准 FAST／SLOW 連線驗證及回滾；清單不完整會阻擋連線。
+
+## DNS 飽和與復原
+
+Proxy 使用獨立且有上限的 resolver pool：總共最多八個 worker、每個 client 最多四個。請求逾時不會提前釋放仍在執行的 DNS 配額；飽和時後續請求回覆 503。已建立的 tunnel 不需要再次解析 DNS。Loopback health endpoint 只代表程序存活，不保證 DNS 容量可用。範例 Compose 的 Proxy 與 Relay／SQLite 屬於不同程序。
+
+Python 無法安全強制終止永久卡在作業系統 resolver 的 thread；在它返回或 Proxy 程序終止並重啟前，該容量不可用。正常 interpreter 關閉也可能等待卡住的 thread。需要時先調查 DNS，再由 Owner 授權重啟程序；不提供自動重啟或 cache。

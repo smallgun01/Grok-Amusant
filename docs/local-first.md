@@ -52,6 +52,8 @@ sudo chmod 0700 "$HOME"/amusant-private/data/relay
 
 Only do this with the newly generated files. Do not change the ownership of your private `secrets.h` or `private.env`. For rootless Docker, check the mapped IDs separately.
 
+Before starting Compose, set `EGRESS_PROXY_ALLOWED_HOSTS` in the private `private.env` to the exact outbound DNS names you have verified; see [outbound host policy](configuration.md#outbound-host-policy). The generated empty value intentionally prevents startup until configured.
+
 ## 3. Build and launch the local containers
 
 From the Amusant repo:
