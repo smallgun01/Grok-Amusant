@@ -2,7 +2,9 @@
 
 [English](README.md) | 繁體中文
 
-Amusant 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、Gemini Live 語音與 Grok Bot 委派任務。
+Amusant 是一個開源 AI 語音夥伴專案，而 Jellii（潔莉）則是基於 Amusant 建構、運行於 M5Stack M5StickS3 的 AI 夥伴。
+
+Jellii 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、Gemini Live 語音與 Grok Bot 委派任務。
 
 ```mermaid
 flowchart LR

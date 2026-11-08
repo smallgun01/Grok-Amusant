@@ -2,7 +2,9 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-An experimental push-to-talk companion connecting a StickS3 device to Gemini Live voice and delegated Grok Bot tasks through a self-hosted relay.
+Amusant is an open-source AI voice companion project. Jellii is the companion built with Amusant, running on the M5Stack M5StickS3.
+
+Jellii is an experimental push-to-talk companion connecting a StickS3 device to Gemini Live voice and delegated Grok Bot tasks through a self-hosted relay.
 
 ```mermaid
 flowchart LR
