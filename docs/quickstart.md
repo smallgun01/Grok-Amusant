@@ -2,7 +2,7 @@
 
 ## Python
 
-Use Python 3.13 and uv. From the repository root:
+The supported Relay runtime requires Python 3.13 or newer and uv. StickS3 TLS-PSK additionally requires Python’s SSL PSK callbacks. The separate legacy/mock-only `relay/pyproject.toml` retains its own Python requirement. From the repository root:
 
 ```sh
 uv sync --locked --extra hardware-opus --group dev

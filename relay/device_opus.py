@@ -3,7 +3,7 @@
 The framing/codec implementation is adapted from Kai v0.12.0
 relay/kai_relay/opus.py (MIT; upstream LICENSE notice reproduced below).
 PyAV is imported only when an Opus connection is selected, leaving the
-existing PCM-only Python 3.11/3.12 development path usable without the extra.
+PCM-only development path usable without the extra.
 
 MIT License
 Copyright (c) 2026 zbruceli

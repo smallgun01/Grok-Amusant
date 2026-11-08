@@ -2,7 +2,7 @@
 
 ## Python
 
-使用 Python 3.13 與 uv，在 repository 根目錄執行：
+支援的 Relay runtime 需要 Python 3.13 以上與 uv；StickS3 TLS-PSK 另需 Python SSL 提供 PSK callback。獨立的舊版／模擬用途 `relay/pyproject.toml` 保留其自身 Python 需求。在 repository 根目錄執行：
 
 ```sh
 uv sync --locked --extra hardware-opus --group dev

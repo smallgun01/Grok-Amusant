@@ -365,6 +365,9 @@ class SQLiteTaskStore:
     def _initialize(self) -> None:
         connection = self._connect()
         try:
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version > SCHEMA_VERSION:
+                raise ValueError("task_store_future_schema")
             connection.execute("PRAGMA journal_mode=WAL")
             tables = {
                 row[0]
@@ -372,7 +375,6 @@ class SQLiteTaskStore:
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 )
             }
-            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if "slow_tasks" not in tables:
                 self._create_v9_schema(connection)
                 self._migrate_v9_to_v10(connection)
