@@ -7,7 +7,7 @@
 ## 準備事項
 
 - 一台可執行 Docker Engine／Compose v2 的 **Linux AMD64 或 ARM64** 電腦（Ubuntu、迷你主機或 Linux Server），安裝 Git、Python 3.13。Windows／macOS 可以另用 Linux 主機或 VM，但不在本路徑驗證範圍。
-- M5Stack StickS3、USB 資料線、安裝相容 ESP BLE Provisioning App 的手機，以及 **2.4GHz Wi-Fi**。
+- M5Stack M5StickS3（SKU K150）、USB 資料線、安裝相容 ESP BLE Provisioning App 的手機，以及 **2.4GHz Wi-Fi**。
 - 自己的 Gemini API Key（須可使用 Gemini Live）。**第一次 FAST 不需要 Grok Bot、網域、公開 IP、Caddy、Cloudflare 或打開對外 Port。**
 
 Linux 主機與 StickS3 必須互相連得到（不要用 Guest Wi-Fi／AP Client Isolation）。確認主機的固定 **RFC1918 LAN IPv4**（例如 `192.168.68.57`），最好在路由器預留 DHCP 位址。即使在區網，裝置仍使用 **TLS 1.2 ECDHE-PSK + WSS／TCP 443**，不退回明文。

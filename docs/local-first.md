@@ -7,7 +7,7 @@ The Amusant owner previously validated **local Ubuntu Relay ↔ physical StickS3
 ## What you need
 
 - One **Linux** desktop / mini-PC / Ubuntu server with Docker Engine + Compose v2, Git, Python 3.13, enough disk for images and PlatformIO. Native `amd64` and `arm64` are supported by the reference build; Windows/macOS can use a Linux host or VM but are not part of this recipe.
-- One StickS3, a USB data cable, a phone with an Espressif-compatible BLE Wi-Fi provisioning app, and a **2.4 GHz Wi-Fi LAN**.
+- One M5Stack M5StickS3 (SKU K150), a USB data cable, a phone with an Espressif-compatible BLE Wi-Fi provisioning app, and a **2.4 GHz Wi-Fi LAN**.
 - A Gemini API key with Gemini Live access. **No Grok Bot, public domain, public IP, Caddy, inbound internet ports, or Cloudflare account is required for the first FAST test.**
 
 Your Linux host and StickS3 must be reachable on the same LAN (no guest Wi-Fi/client isolation). Select a **stable RFC1918 IPv4** on the Linux host, such as `192.168.68.57`; reserve it on your router. It must actually belong to that host. This recipe uses **TLS 1.2 ECDHE-PSK over WSS on TCP 443 even on LAN**; it never downgrades to plaintext.

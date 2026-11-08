@@ -2,7 +2,9 @@
 
 English | [繁體中文](README.zh-TW.md)
 
-An experimental push-to-talk companion connecting a StickS3 device to Gemini Live voice and delegated Grok Bot tasks through a self-hosted relay.
+Amusant is an open-source AI voice companion project. Jellii is the companion built with Amusant, running on the M5Stack M5StickS3.
+
+Jellii is an experimental push-to-talk companion connecting a StickS3 device to Gemini Live voice and delegated Grok Bot tasks through a self-hosted relay.
 
 ```mermaid
 flowchart LR
@@ -16,6 +18,16 @@ flowchart LR
 ```
 
 The callback ingress is a separately configured boundary; the sample Compose file does not publish it. The supported slow executor is `grok_callback`; missing or unsupported profiles fail closed. This is experimental Public Alpha source, not an approved production deployment.
+
+## Hardware
+
+Jellii uses the **M5Stack M5StickS3 (SKU K150)**, a compact ESP32-S3 device with 8 MB Flash, 8 MB PSRAM, a 1.14-inch 135 × 240 LCD, microphone, speaker, 2.4 GHz Wi-Fi, Bluetooth Low Energy (BLE), and a 250 mAh battery.
+
+![Jellii running on an M5StickS3](docs/images/jellii-sticks3.jpg)
+
+Hold the front **A** button to talk and release to send. The side **B** button wakes the screen and can read an unread Inbox result; from Idle or Offline, hold B for five seconds to enter Wi-Fi setup. If the screen is off, wake it first.
+
+[M5Stack product page](https://shop.m5stack.com/products/m5sticks3-esp32s3-mini-iot-dev-kit) · [Official hardware documentation](https://docs.m5stack.com/en/core/StickS3)
 
 ## Build Your Own Jellii
 

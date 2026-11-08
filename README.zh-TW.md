@@ -2,7 +2,9 @@
 
 [English](README.md) | 繁體中文
 
-Amusant 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、Gemini Live 語音與 Grok Bot 委派任務。
+Amusant 是一個開源 AI 語音夥伴專案，而 Jellii（潔莉）則是基於 Amusant 建構、運行於 M5Stack M5StickS3 的 AI 夥伴。
+
+Jellii 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、Gemini Live 語音與 Grok Bot 委派任務。
 
 ```mermaid
 flowchart LR
@@ -16,6 +18,16 @@ flowchart LR
 ```
 
 Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。本專案為實驗性 Public Alpha 原始碼，尚未核准正式生產部署。
+
+## 使用硬體
+
+Jellii 使用 **M5Stack M5StickS3（SKU K150）**，配備 ESP32-S3、8 MB Flash、8 MB PSRAM、1.14 吋 135 × 240 LCD、麥克風、喇叭、2.4 GHz Wi-Fi、藍牙低功耗（BLE）及 250 mAh 電池。
+
+![在 M5StickS3 上運行的 Jellii](docs/images/jellii-sticks3.jpg)
+
+按住正面 **A 鍵**說話，放開後送出；側面 **B 鍵**可喚醒螢幕及朗讀未讀 Inbox 結果。在 Idle／Offline 狀態長按 B 鍵五秒可進入 Wi-Fi 配網；螢幕關閉時須先喚醒。
+
+[M5Stack 官方產品頁](https://shop.m5stack.com/products/m5sticks3-esp32s3-mini-iot-dev-kit) · [官方硬體文件](https://docs.m5stack.com/en/core/StickS3)
 
 ## Build Your Own Jellii
 
