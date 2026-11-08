@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import os
 import re
@@ -37,6 +38,11 @@ class ProxyCapacity:
         self.tunnel_slots = {peer: asyncio.Semaphore(MAX_TUNNELS_PER_CLIENT) for peer in allowed_peers}
         self.dns_slots = {peer: asyncio.Semaphore(MAX_DNS_WORKERS_PER_CLIENT) for peer in allowed_peers}
         self.dns_total = asyncio.Semaphore(MAX_DNS_WORKERS)
+        self.resolver_pool = ThreadPoolExecutor(max_workers=MAX_DNS_WORKERS, thread_name_prefix="proxy-dns")
+
+    def close(self) -> None:
+        # Running getaddrinfo calls cannot be cancelled; process termination may be required.
+        self.resolver_pool.shutdown(wait=False, cancel_futures=True)
 
     async def acquire_tunnel(self, peer: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         semaphore = self.tunnel_slots.get(peer)
@@ -119,10 +125,9 @@ def parse_connect_target(request_line: bytes) -> tuple[str, int]:
             raise ProxyRequestError("invalid CONNECT authority")
     if not host or any(char in host for char in "/\\?#@%\r\n\t "):
         raise ProxyRequestError("invalid CONNECT host")
-    try:
-        port = int(tail)
-    except ValueError:
-        raise ProxyRequestError("invalid CONNECT port") from None
+    if not tail.isascii() or not tail.isdigit():
+        raise ProxyRequestError("invalid CONNECT port")
+    port = int(tail)
     if port != CONNECT_PORT:
         raise ProxyRequestError("only HTTPS port 443 is permitted", status=403)
     try:
@@ -146,9 +151,15 @@ async def resolve_public_addresses(
             raise ProxyRequestError("DNS capacity temporarily unavailable", status=503)
         reserved = True
     resolver = resolver or socket.getaddrinfo
-    future = asyncio.get_running_loop().run_in_executor(
-        None, resolver, host, port, 0, socket.SOCK_STREAM
-    )
+    try:
+        future = asyncio.get_running_loop().run_in_executor(
+            capacities.resolver_pool if capacities is not None else None,
+            resolver, host, port, 0, socket.SOCK_STREAM,
+        )
+    except RuntimeError:
+        if reserved:
+            capacities.release_dns(peer_ip)
+        raise ProxyRequestError("DNS capacity temporarily unavailable", status=503) from None
     def finish_resolution(done: asyncio.Future) -> None:
         try:
             done.exception()
@@ -384,6 +395,7 @@ async def serve() -> None:
         for server in servers:
             server.close()
         await asyncio.gather(*(server.wait_closed() for server in servers), return_exceptions=True)
+        capacities.close()
 
 
 if __name__ == "__main__":

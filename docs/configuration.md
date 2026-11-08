@@ -13,3 +13,9 @@ Firmware configuration is local to the Kai build checkout. The compile-only CI p
 Set `EGRESS_PROXY_ALLOWED_HOSTS` in the private Compose environment to a comma-separated list of exact DNS names required for your deployment. Missing, empty, malformed, wildcard and IP-literal entries fail closed. CONNECT names are normalized and compared exactly; DNS results must all be public on every request. The locked `google-genai` SDK uses `generativelanguage.googleapis.com` as its default API-key Live base URL, but auxiliary endpoints and the owner-configured Grok Routine host must be verified for the actual deployment; this observation is not a complete allowlist. No real Routine URL belongs in this repository.
 
 Both providers share one Relay process and network identity; this policy does not isolate their credentials. CONNECT hostname matching does not inspect encrypted TLS SNI and cannot distinguish other services sharing an allowed IP. Review required hosts privately and approve FAST/SLOW connectivity and rollback before rollout; an incomplete list will block traffic.
+
+## DNS saturation and recovery
+
+The proxy uses a dedicated bounded resolver pool: at most eight workers total and four per client. A request timeout does not release its DNS reservation until the underlying resolver actually returns; subsequent saturated requests receive 503. Already established tunnels do not require another DNS lookup. The loopback health endpoint is a liveness check, not proof that DNS capacity is available. Proxy and Relay/SQLite run in separate processes in the sample Compose.
+
+A thread blocked indefinitely in the operating system resolver cannot be safely killed by Python. Capacity remains unavailable until it returns or the proxy process is terminated and restarted; graceful interpreter shutdown can also wait for a stuck thread. Investigate DNS and use an owner-authorized process restart if necessary. No cache or automatic restart is provided.
