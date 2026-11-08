@@ -259,7 +259,7 @@ class SlowPathToolRouter:
             if receipt.status == "confirmation_required":
                 self._pending_abandon = (receipt.task_id, turn_id, time.monotonic() + 60.0)
                 return {"status": "confirmation_required", "task_id": receipt.task_id,
-                        "message": "我可以放棄等待，讓你交辦新工作，但 Grok 可能還在執行。確定嗎？"}
+                        "message": "確定放棄嗎？Grok 可能繼續執行唷。"}
             result: dict[str, JSONValue] = {
                 "status": receipt.status, "code": receipt.code,
             }

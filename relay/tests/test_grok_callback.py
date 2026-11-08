@@ -795,7 +795,9 @@ class GrokCallbackTests(unittest.IsolatedAsyncioTestCase):
         async def call(turn, **args):
             return await router(ToolCallEvent("call-" + str(uuid4()), "cancel_task", args), turn)
         self.assertEqual((await call(1, confirm=True))["status"], "rejected")
-        self.assertEqual((await call(2))["status"], "confirmation_required")
+        warning = await call(2)
+        self.assertEqual(warning["status"], "confirmation_required")
+        self.assertEqual(warning["message"], "確定放棄嗎？Grok 可能繼續執行唷。")
         self.assertEqual((await call(2, confirm=True))["status"], "rejected")
         unchanged = self.store.get_by_task_id(self.task_id)
         self.assertEqual(unchanged["status"], "running")
