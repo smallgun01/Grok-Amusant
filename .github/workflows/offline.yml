@@ -17,3 +17,107 @@ jobs:
 
       - run: uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1/tests -p test_provision_wifi.py -v
       - run: uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1.5/tests -p test_provision_wifi.py -v
+      - run: uv run --locked python -m unittest discover -s deploy/selfhost -p "test_*.py" -v
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build local images
+        run: |
+          docker build -f deploy/oci-a1/Dockerfile.relay -t amusant-relay:selfhost .
+          docker build -f deploy/oci-a1/Dockerfile.egress-proxy -t amusant-egress:selfhost .
+          docker build -f deploy/selfhost/Dockerfile.device-ingress -t amusant-device-ingress:selfhost .
+      - name: Prepare synthetic local configuration
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/amusant-smoke
+        run: |
+          host_ip=$(hostname -I | awk '{print $1}')
+          echo "HOST_IP=$host_ip" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/fake-kai/src"
+          touch "$RUNNER_TEMP/fake-kai/src/secrets.example.h"
+          HOST_IP="$host_ip" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from deploy.selfhost.prepare import prepare
+          prepare(private_dir=Path(os.environ['SMOKE_DIR']), firmware_dir=Path(os.environ['RUNNER_TEMP'])/'fake-kai', device_host=os.environ['HOST_IP'], owner_id='smoke-owner', gemini_api_key='synthetic-key-no-provider-use', mode='local')
+          PY
+          sudo chown root:20000 "$SMOKE_DIR"/secrets/*
+          sudo chmod 0440 "$SMOKE_DIR"/secrets/*
+          sudo chown 10001:10001 "$SMOKE_DIR/data/relay"
+          sudo chmod 0700 "$SMOKE_DIR/data/relay"
+      - name: Start and verify health and network
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/amusant-smoke
+        run: |
+          set -eu
+          compose() { docker compose --project-name amusant-smoke --env-file "$SMOKE_DIR/private.env" -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.local.yaml "$@"; }
+          compose config --quiet
+          compose up -d
+          for i in $(seq 1 12); do
+            relay=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q relay)")
+            proxy=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q egress_proxy)")
+            if [ "$relay" = healthy ] && [ "$proxy" = healthy ]; then break; fi
+            sleep 3
+          done
+          compose ps
+          echo "Sanitized Relay diagnostics"
+          docker inspect --format 'state={{.State.Status}} restarts={{.RestartCount}} bindings={{json .HostConfig.PortBindings}} active={{json .NetworkSettings.Ports}} health={{json .State.Health}}' "$(compose ps -q relay)"
+          compose logs --tail=30 relay
+          failed=0
+          if [ "$relay" = healthy ] && [ "$proxy" = healthy ]; then echo "Health PASS"; else echo "Health FAIL"; failed=1; fi
+          mapping=$(docker port "$(compose ps -q device_ingress)" 8443/tcp || true)
+          if [ "$mapping" = "$HOST_IP:443" ]; then echo "443 mapping PASS"; else echo "443 mapping FAIL"; failed=1; fi
+          callback=$(docker port "$(compose ps -q relay)" 8645/tcp || true)
+          if [ -z "$callback" ]; then echo "Callback unpublished PASS"; else echo "Callback unpublished FAIL"; failed=1; fi
+          if python3 -c 'import socket,os; s=socket.create_connection((os.environ["HOST_IP"],443),timeout=5); s.close()'; then echo "443 TCP reachability PASS"; else echo "443 TCP reachability FAIL"; failed=1; fi
+          SMOKE_DIR="$SMOKE_DIR" python3 - <<'PY'
+          import os, re, socket, ssl
+          from pathlib import Path
+          header = (Path(os.environ['RUNNER_TEMP'])/'fake-kai/src/secrets.h').read_text()
+          identity = re.search(r'KAI_PSK_IDENTITY "([^"]+)"', header).group(1)
+          key = re.search(r'KAI_PSK_HEX "([^"]+)"', header).group(1)
+          ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+          ctx.check_hostname = False
+          ctx.verify_mode = ssl.CERT_NONE
+          ctx.minimum_version = ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+          ctx.set_ciphers('ECDHE-PSK-CHACHA20-POLY1305:ECDHE-PSK-AES128-CBC-SHA256')
+          ctx.set_psk_client_callback(lambda hint: (identity, bytes.fromhex(key)))
+          with socket.create_connection((os.environ['HOST_IP'], 443), timeout=5) as raw:
+              with ctx.wrap_socket(raw, server_hostname=None) as tls:
+                  assert tls.version() == 'TLSv1.2'
+          print('Synthetic TLS-PSK handshake through LAN ingress PASS')
+          PY
+          # Controlled non-provider probe on the outbound-only network: Relay must not reach it directly.
+          docker run -d --name amusant-smoke-probe --network amusant-smoke_proxy_outbound --entrypoint python amusant-device-ingress:selfhost -m http.server 8080 >/dev/null
+          probe_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' amusant-smoke-probe)
+          docker exec "$(compose ps -q egress_proxy)" python -c 'import socket,sys,time; time.sleep(1); socket.create_connection((sys.argv[1],8080),timeout=5).close()' "$probe_ip"
+          if docker exec "$(compose ps -q relay)" /app/.venv/bin/python -c 'import socket,sys; socket.create_connection((sys.argv[1],8080),timeout=2)' "$probe_ip"; then echo "Direct egress isolation FAIL"; failed=1; else echo "Direct egress isolation PASS"; fi
+          docker rm -f amusant-smoke-probe >/dev/null
+          # Enable only the callback listener with a synthetic canonical Host. No provider call.
+          SMOKE_ENV="$SMOKE_DIR/private.env" python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path(os.environ['SMOKE_ENV']); s=p.read_text()
+          s=s.replace('https://callback.example.invalid/callback/results','https://callback.example.com/callback/results').replace('AMUSANT_GROK_CALLBACK_TRUSTED_HOSTS=callback.example.invalid','AMUSANT_GROK_CALLBACK_TRUSTED_HOSTS=callback.example.com')
+          p.write_text(s)
+          PY
+          compose up -d
+          for i in $(seq 1 20); do
+            if curl --noproxy '*' -s -o /dev/null -X POST -H 'Host: callback.example.com' -w '%{http_code}' http://172.30.74.2:8645/callback/results | grep -qx 401; then echo "Private callback reachable PASS"; break; fi
+            if [ "$i" = 20 ]; then echo "Private callback reachable FAIL"; failed=1; fi
+            sleep 2
+          done
+          if [ -z "$(docker port "$(compose ps -q relay)" 8645/tcp 2>/dev/null || true)" ]; then echo "Callback remains unpublished PASS"; else echo "Callback remains unpublished FAIL"; failed=1; fi
+          exit "$failed"
+      - name: Teardown
+        if: always()
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/amusant-smoke
+        run: |
+          if [ -f "$SMOKE_DIR/private.env" ]; then
+            docker compose --project-name amusant-smoke --env-file "$SMOKE_DIR/private.env" -f deploy/oci-a1/compose.grok.yaml -f deploy/selfhost/compose.local.yaml down -v || true
+          fi

@@ -22,6 +22,18 @@ class PreflashTests(unittest.TestCase):
         for domain in ("example.com", "device.example.com", "device.invalid", "device.test", "device.onion", "nested.device.onion", "localhost"):
             self.assertFalse(validate(GOOD.replace("synthetic-device-host.net", domain), domain))
 
+    def test_lan_private_ip_requires_explicit_opt_in(self):
+        for address in ("192.168.68.57", "10.1.2.3", "172.16.2.20", "172.31.255.254"):
+            with self.subTest(address=address):
+                config = GOOD.replace("synthetic-device-host.net", address)
+                self.assertFalse(validate(config, address))
+                self.assertTrue(validate(config, address, allow_private_ip=True))
+                self.assertFalse(validate(config, "192.168.68.58", allow_private_ip=True))
+        for address in ("127.0.0.1", "169.254.1.4", "172.32.0.1", "192.0.2.1", "8.8.8.8", "0.0.0.0"):
+            with self.subTest(rejected=address):
+                config = GOOD.replace("synthetic-device-host.net", address)
+                self.assertFalse(validate(config, address, allow_private_ip=True))
+
     def test_compile_guard(self):
         patch = (Path(__file__).resolve().parents[1] / "amusant-sticks3-base-v0.12.0.patch").read_text()
         lines = patch.splitlines()

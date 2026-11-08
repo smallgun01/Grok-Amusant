@@ -1,0 +1,15 @@
+# Reference only. prepare.py generates a matching PRIVATE Caddyfile.
+# Port 443 belongs to raw device TLS-PSK, not Caddy.
+# Upstream is the separate callback_api Docker bridge IP, NOT the device listener.
+{
+    auto_https disable_redirects
+}
+
+callback.YOUR_DOMAIN:9443 {
+    tls {
+        issuer acme {
+            disable_tlsalpn_challenge
+        }
+    }
+    reverse_proxy 172.30.74.2:8645
+}

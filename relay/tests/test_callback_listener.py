@@ -48,6 +48,25 @@ class CallbackListenerConfigTests(unittest.TestCase):
                 callback_listener_config({**env, **change}, device_host="172.29.1.2")
 
 
+    def test_explicit_https_port_requires_exact_match(self):
+        env = {
+            "RELAY_CALLBACK_BIND_IP": "172.29.2.2",
+            "RELAY_CALLBACK_LISTEN_PORT": "8645",
+            "AMUSANT_GROK_CALLBACK_URL": "https://callback.example.com:9443/callback/results",
+            "AMUSANT_GROK_CALLBACK_TRUSTED_HOSTS": "callback.example.com",
+            "AMUSANT_GROK_CALLBACK_SERVICE_PORT": "9443",
+        }
+        self.assertEqual(callback_listener_config(env, device_host="172.29.1.2"), ("172.29.2.2", 8645))
+        for override in (
+            {"AMUSANT_GROK_CALLBACK_SERVICE_PORT": "443"},
+            {"AMUSANT_GROK_CALLBACK_SERVICE_PORT": "0"},
+            {"AMUSANT_GROK_CALLBACK_SERVICE_PORT": "65536"},
+            {"AMUSANT_GROK_CALLBACK_URL": "https://callback.example.com/callback/results"},
+        ):
+            with self.subTest(override=override), self.assertRaises(ValueError):
+                callback_listener_config({**env, **override}, device_host="172.29.1.2")
+
+
 class CallbackListenerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.root = Path(__file__).parent / f".callback-listener-{uuid4().hex}"

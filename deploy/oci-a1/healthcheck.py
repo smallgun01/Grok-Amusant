@@ -15,7 +15,9 @@ def main() -> int:
         port = int(raw_port)
         with socket.create_connection((host, port), timeout=2):
             pass
-        if os.environ.get("AMUSANT_SLOW_EXECUTOR") == "grok_callback":
+        callback_url = os.environ.get("AMUSANT_GROK_CALLBACK_URL", "")
+        fast_only = callback_url == "https://callback.example.invalid/callback/results"
+        if os.environ.get("AMUSANT_SLOW_EXECUTOR") == "grok_callback" and not fast_only:
             callback_host = os.environ["RELAY_CALLBACK_BIND_IP"]
             callback_port = int(os.environ.get("RELAY_CALLBACK_LISTEN_PORT", "8645"))
             external = urlsplit(os.environ["AMUSANT_GROK_CALLBACK_URL"])

@@ -1,0 +1,25 @@
+# LAN-only raw TCP ingress; Relay stays on internal-only networks.
+services:
+  relay:
+    platform: ${AMUSANT_DOCKER_PLATFORM:?set local Docker platform}
+  egress_proxy:
+    platform: ${AMUSANT_DOCKER_PLATFORM:?set local Docker platform}
+  device_ingress:
+    image: amusant-device-ingress:selfhost
+    platform: ${AMUSANT_DOCKER_PLATFORM:?set local Docker platform}
+    user: "10003:10003"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    environment:
+      RELAY_BIND_IP: ${RELAY_BIND_IP:?}
+    ports:
+      - "${HOST_LAN_IP:?set the host LAN IPv4}:443:8443/tcp"
+    networks:
+      relay_api: {}
+      proxy_outbound: {}
+    depends_on:
+      relay:
+        condition: service_healthy
