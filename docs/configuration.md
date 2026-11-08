@@ -7,3 +7,9 @@ The example Compose configuration selects `grok_callback`, SQLite and a separate
 A real deployment requires independently designed private device ingress, authenticated callback ingress, a securely configured proxy, owner-managed credentials, and verification of the complete routing and provider setup. Do not point an example at an actual service without an explicitly authorized deployment plan.
 
 Firmware configuration is local to the Kai build checkout. The compile-only CI placeholders deliberately cannot serve as a real deployment configuration. See [firmware instructions](../patches/amusant-sticks3-base-v0.12.0.md).
+
+## Outbound host policy
+
+Set `EGRESS_PROXY_ALLOWED_HOSTS` in the private Compose environment to a comma-separated list of exact DNS names required for your deployment. Missing, empty, malformed, wildcard and IP-literal entries fail closed. CONNECT names are normalized and compared exactly; DNS results must all be public on every request. The locked `google-genai` SDK uses `generativelanguage.googleapis.com` as its default API-key Live base URL, but auxiliary endpoints and the owner-configured Grok Routine host must be verified for the actual deployment; this observation is not a complete allowlist. No real Routine URL belongs in this repository.
+
+Both providers share one Relay process and network identity; this policy does not isolate their credentials. CONNECT hostname matching does not inspect encrypted TLS SNI and cannot distinguish other services sharing an allowed IP. Review required hosts privately and approve FAST/SLOW connectivity and rollback before rollout; an incomplete list will block traffic.

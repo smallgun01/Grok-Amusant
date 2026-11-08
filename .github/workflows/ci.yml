@@ -175,6 +175,8 @@ jobs:
           relay.tests.test_live_bridge_shutdown.GrokBridgeSigtermProcessTests
           relay.tests.test_live_bridge_shutdown.ActiveGrokDispatcherShutdownTests
           relay.tests.psk_wss_integration -v
+      - name: Egress proxy security tests
+        run: uv run --locked python -m unittest discover -s deploy/oci-a1 -p test_egress_proxy.py -v
       - name: Preflash and USB Wi-Fi setup tests
         run: |
           uv run --locked python -m unittest discover -s patches/sticks3-baseline -p test_preflash.py -v

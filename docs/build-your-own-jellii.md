@@ -55,6 +55,8 @@ sudo chmod 0700 "$HOME"/amusant-private/data/relay
 
 Do not `chown` the private environment file or firmware `secrets.h`. File-backed Compose secrets are not automatically remapped for container UID/GID; check the *in-container* ownership and permissions if startup fails. Do not disable the fail-closed permission validation. Rootless Docker and NAS setups need independent checking.
 
+Before starting Compose, set `EGRESS_PROXY_ALLOWED_HOSTS` in the private `private.env` to your verified exact outbound DNS names; see [outbound host policy](configuration.md#outbound-host-policy). An empty value intentionally blocks startup.
+
 ## 3. Build, configure and start the Relay + Egress proxy
 
 ```sh

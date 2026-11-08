@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import os
+import re
 import socket
 
 MAX_HEADER_BYTES = 8192
@@ -66,6 +67,41 @@ class ProxyCapacity:
         self.dns_total.release()
 
 
+_HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+
+def normalize_hostname(value: str) -> str:
+    """Normalize one exact DNS name; reject literals, wildcards and malformed labels."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("invalid host")
+    if value.endswith("."):
+        value = value[:-1]
+    try:
+        host = value.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        raise ValueError("invalid host") from None
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("IP literals are not permitted")
+    if len(host) > 253 or not host or not all(_HOST_LABEL.fullmatch(x) for x in host.split(".")):
+        raise ValueError("invalid host")
+    return host
+
+def parse_allowed_hosts(value: str | None) -> frozenset[str]:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("EGRESS_PROXY_ALLOWED_HOSTS must be configured")
+    parts = value.split(",")
+    try:
+        hosts = frozenset(normalize_hostname(x.strip()) for x in parts)
+    except ValueError:
+        raise ValueError("EGRESS_PROXY_ALLOWED_HOSTS contains an invalid host") from None
+    if len(parts) > 64 or any(host == "invalid" or host.endswith(".invalid") for host in hosts):
+        raise ValueError("EGRESS_PROXY_ALLOWED_HOSTS contains an invalid host")
+    return hosts
+
+
 def parse_connect_target(request_line: bytes) -> tuple[str, int]:
     try:
         method, authority, version = request_line.decode("ascii").split(" ")
@@ -90,18 +126,9 @@ def parse_connect_target(request_line: bytes) -> tuple[str, int]:
     if port != CONNECT_PORT:
         raise ProxyRequestError("only HTTPS port 443 is permitted", status=403)
     try:
-        literal = ipaddress.ip_address(host)
+        host = normalize_hostname(host)
     except ValueError:
-        try:
-            host = host.encode("idna").decode("ascii").lower().rstrip(".")
-        except UnicodeError:
-            raise ProxyRequestError("invalid CONNECT host") from None
-        if not host or len(host) > 253:
-            raise ProxyRequestError("invalid CONNECT host")
-    else:
-        if not literal.is_global:
-            raise ProxyRequestError("destination is not public", status=403)
-        host = literal.compressed
+        raise ProxyRequestError("invalid CONNECT host", status=403) from None
     return host, port
 
 
@@ -201,6 +228,7 @@ async def handle_connect(
     writer: asyncio.StreamWriter,
     *,
     allowed_peers: frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address],
+    allowed_hosts: frozenset[str],
     capacities: ProxyCapacity | None = None,
     resolver=None,
     connect_upstream=None,
@@ -230,6 +258,8 @@ async def handle_connect(
             await writer.drain()
             return
         host, port = parse_connect_target(header.split(b"\r\n", 1)[0])
+        if host not in allowed_hosts:
+            raise ProxyRequestError("destination denied", status=403)
         addresses = await resolve_public_addresses(
             host, port, capacities=capacities, peer_ip=peer_ip, resolver=resolver
         )
@@ -334,11 +364,12 @@ def proxy_config(environ):
 
 async def serve() -> None:
     bind_ips, allowed_peers = proxy_config(os.environ)
+    allowed_hosts = parse_allowed_hosts(os.environ.get("EGRESS_PROXY_ALLOWED_HOSTS"))
     capacities = ProxyCapacity(allowed_peers)
     proxy_port = int(os.environ.get("EGRESS_PROXY_PORT", "3128"))
 
     async def bounded_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await handle_connect(reader, writer, allowed_peers=allowed_peers, capacities=capacities)
+        await handle_connect(reader, writer, allowed_peers=allowed_peers, allowed_hosts=allowed_hosts, capacities=capacities)
 
     servers = []
     try:

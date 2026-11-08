@@ -88,6 +88,7 @@ services:
       EGRESS_PROXY_MODE: grok
       EGRESS_PROXY_BIND_IPS: ${EGRESS_PROXY_RELAY_BIND_IP:?}
       EGRESS_PROXY_ALLOWED_CLIENTS: ${RELAY_EGRESS_IP:?}
+      EGRESS_PROXY_ALLOWED_HOSTS: ${EGRESS_PROXY_ALLOWED_HOSTS:?set exact outbound host allowlist}
     networks:
       relay_egress:
         ipv4_address: ${EGRESS_PROXY_RELAY_BIND_IP:?}
