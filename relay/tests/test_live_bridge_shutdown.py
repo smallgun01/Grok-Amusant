@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -15,6 +18,7 @@ import threading
 import time
 import unittest
 from uuid import uuid4
+from unittest.mock import patch
 
 from websockets.sync.client import connect as websocket_connect
 
@@ -228,7 +232,7 @@ class LiveBridgeSigtermProcessTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "posix", "SIGTERM process behavior is exercised on POSIX CI")
 class GrokBridgeSigtermProcessTests(unittest.TestCase):
-    def test_shutdown_and_restart_preserve_queued_task_without_provider_calls(self):
+    def test_degraded_fast_shutdown_and_restart_preserve_queued_task(self):
         with tempfile.TemporaryDirectory(prefix="amusant-grok-shutdown-") as temp_dir:
             db_path = Path(temp_dir) / "tasks.sqlite3"
             task_id = str(uuid4())
@@ -290,6 +294,121 @@ class GrokBridgeSigtermProcessTests(unittest.TestCase):
                     if process.poll() is None:
                         process.kill()
                     process.communicate(timeout=5)
+
+
+class ActiveGrokDispatcherShutdownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_active_dispatcher_drains_and_restart_never_resends_ambiguous_submission(self):
+        from relay import live_bridge
+        from relay.dispatcher import AsyncDispatcher
+
+        with tempfile.TemporaryDirectory(prefix="synthetic-active-grok-") as temp_dir:
+            db_path = Path(temp_dir) / "tasks.sqlite3"
+            task_id = str(uuid4())
+            now = datetime.now(timezone.utc)
+            store = SQLiteTaskStore(database_path=db_path, max_pending_tasks=8)
+            store.admit(TaskAdmissionRequest(
+                task_id=task_id, client_id="synthetic-owner", conversation_id="synthetic-conversation",
+                turn_id=1, call_id="synthetic-call", task="synthetic task", task_kind="agent",
+                backend="grok_bot", created_at=now, expires_at=now + timedelta(minutes=5),
+                executor_kind="grok_callback",
+            ))
+            entered = asyncio.Event()
+            cancelled = asyncio.Event()
+            calls = []
+            starts = []
+            stops = []
+            signals = []
+            dispatcher_started = asyncio.Event()
+
+            class FakeGrokExecutor:
+                async def execute(self, task):
+                    calls.append(task.task_id)
+                    current = datetime.now(timezone.utc)
+                    await asyncio.to_thread(
+                        store.begin_grok_submission, task.task_id,
+                        token_sha256=hashlib.sha256(b"synthetic-capability").hexdigest(),
+                        token_expires_at=current + timedelta(minutes=4),
+                        callback_deadline_at=current + timedelta(minutes=2), now=current,
+                    )
+                    entered.set()
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        cancelled.set()
+
+            @asynccontextmanager
+            async def fake_callback(_app, _host, _port):
+                task = asyncio.create_task(asyncio.Event().wait())
+                try:
+                    yield task
+                finally:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+
+            start_original, stop_original = AsyncDispatcher.start, AsyncDispatcher.stop
+            async def traced_start(dispatcher):
+                await start_original(dispatcher)
+                starts.append(dispatcher)
+                dispatcher_started.set()
+            async def traced_stop(dispatcher):
+                stops.append(dispatcher)
+                await stop_original(dispatcher)
+            def install(stop_event, _loop):
+                signals.append(stop_event)
+                return ()
+            env = {
+                "AMUSANT_DEVICE_TOKEN": "synthetic-device-token",
+                "AMUSANT_LIVE_PROVIDER": "gemini", "GEMINI_API_KEY": "synthetic-unused-key",
+                "AMUSANT_CLIENT_ID": "synthetic-owner", "AMUSANT_BACKEND_ID": "grok_bot",
+                "AMUSANT_TASK_STORE": "sqlite", "AMUSANT_TASK_DB": str(db_path),
+                "AMUSANT_SLOW_EXECUTOR": "grok_callback",
+                "AMUSANT_GROK_CALLBACK_URL": "https://callback.example.com/callback/results",
+                "AMUSANT_GROK_CALLBACK_TRUSTED_HOSTS": "callback.example.com",
+                "AMUSANT_RELAY_SHUTDOWN_GRACE_SECONDS": "0.2",
+            }
+            executor = FakeGrokExecutor()
+            with (patch.dict(os.environ, env, clear=True),
+                  patch("relay.application.build_task_store", return_value=store),
+                  patch("relay.application.build_live_provider", return_value=object()),
+                  patch("relay.application.load_grok_callback_executor", return_value=executor),
+                  patch("relay.callback_listener.callback_listener_config", return_value=("127.0.0.1", 8645)),
+                  patch("relay.callback_listener.serve_callback", side_effect=fake_callback),
+                  patch("relay.live_bridge.install_shutdown_handlers", side_effect=install),
+                  patch("relay.live_bridge.remove_shutdown_handlers"),
+                  patch.object(AsyncDispatcher, "start", traced_start),
+                  patch.object(AsyncDispatcher, "stop", traced_stop)):
+                first = asyncio.create_task(live_bridge.run("127.0.0.1", 0, "synthetic-device-token"))
+                try:
+                    await asyncio.wait_for(entered.wait(), 5)
+                    self.assertEqual(len(starts), 1)
+                    self.assertEqual(calls, [task_id])
+                    self.assertEqual(store.get_by_task_id(task_id)["grok_submission_state"], "sending")
+                    signals[0].set()
+                    await asyncio.wait_for(first, 5)
+                    self.assertEqual(stops, starts)
+                    self.assertTrue(cancelled.is_set())
+                    dispatcher_started.clear()
+                    second = asyncio.create_task(live_bridge.run("127.0.0.1", 0, "synthetic-device-token"))
+                    try:
+                        await asyncio.wait_for(dispatcher_started.wait(), 5)
+                        self.assertEqual(len(starts), 2)
+                        row = store.get_by_task_id(task_id)
+                        self.assertEqual(row["status"], "uncertain")
+                        self.assertEqual(row["dispatch_state"], "uncertain")
+                        await asyncio.sleep(0.1)
+                        self.assertEqual(calls, [task_id])
+                        signals[1].set()
+                        await asyncio.wait_for(second, 5)
+                        self.assertEqual(stops, starts)
+                    finally:
+                        if not second.done():
+                            second.cancel()
+                            await asyncio.gather(second, return_exceptions=True)
+                finally:
+                    if not first.done():
+                        first.cancel()
+                        await asyncio.gather(first, return_exceptions=True)
 
 
 if __name__ == "__main__":
