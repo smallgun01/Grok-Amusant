@@ -252,6 +252,10 @@ jobs:
           #define KAI_DEVICE_TOKEN "compile-only-placeholder"
           EOF
           platformio run -d kai-upstream/firmware -e sticks3
+      - name: Test inbox wake handling with pinned M5Unified button
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -I kai-upstream/firmware/src -I kai-upstream/firmware/.pio/libdeps/sticks3/M5Unified/src patches/sticks3-baseline/tests/test_m5_button.cpp -o "$RUNNER_TEMP/m5-button"
+          "$RUNNER_TEMP/m5-button"
 
   images:
     needs: scope
