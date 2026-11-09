@@ -2171,26 +2171,31 @@ class SQLiteTaskStore:
         finally:
             connection.close()
 
-    def inbox_ready(self, *, client_id: str) -> bool:
-        """Read-only presence of a readable, unviewed result on the latest task."""
+    def latest_unread_inbox_speech(self, *, client_id: str) -> dict[str, str] | None:
+        """Return only the latest unread speech and its task ID, without acknowledging it."""
         if not isinstance(client_id, str) or not _ID_RE.fullmatch(client_id):
             raise AdmissionUnavailable("invalid_identity")
         connection = self._connect()
         try:
-            return connection.execute(
-                "SELECT 1 FROM slow_tasks AS t JOIN task_inbox AS i USING(task_id) "
+            row = connection.execute(
+                "SELECT t.task_id, r.speak FROM slow_tasks AS t JOIN task_inbox AS i USING(task_id) "
                 "JOIN task_results AS r USING(task_id) "
-                "WHERE t.task_id=(SELECT task_id FROM slow_tasks WHERE client_id=? "
-                "ORDER BY created_at DESC, task_id DESC LIMIT 1) "
+                "WHERE t.client_id=? "
                 "AND i.delivery_state IN ('pending','notified') "
                 "AND (t.status='completed' OR (t.status='failed' AND "
                 "t.executor_kind='grok_callback' AND t.grok_reported_outcome='not_completed')) "
-                "AND r.speak IS NOT NULL LIMIT 1", (client_id,),
-            ).fetchone() is not None
+                "AND r.speak IS NOT NULL "
+                "ORDER BY t.created_at DESC, t.task_id DESC LIMIT 1", (client_id,),
+            ).fetchone()
+            return None if row is None else {"task_id": row[0], "speak": row[1]}
         except sqlite3.Error:
             raise AdmissionUnavailable("task_store_unavailable") from None
         finally:
             connection.close()
+
+    def inbox_ready(self, *, client_id: str) -> bool:
+        """Read-only presence of the latest readable, unviewed result."""
+        return self.latest_unread_inbox_speech(client_id=client_id) is not None
 
     def lookup_inbox(
         self,

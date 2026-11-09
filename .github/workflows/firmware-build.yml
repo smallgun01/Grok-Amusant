@@ -33,6 +33,9 @@ jobs:
           python patches/kai-v0.12.0-wifi-w1.5/tests/run_host_tests.py --firmware-root kai-upstream/firmware
           python patches/kai-v0.12.0-wifi-w2b1/tests/run_host_tests.py --firmware-root kai-upstream/firmware --wifi-tests patches/kai-v0.12.0-wifi-w1.5/tests
           python patches/kai-v0.12.0-wifi-w2bqr/tests/check_owner_setup_wiring.py --firmware-root kai-upstream/firmware
+          python patches/sticks3-baseline/tests/check_inbox_wiring.py --firmware-root kai-upstream/firmware
+          g++ -std=c++11 -Wall -Wextra -Werror -I kai-upstream/firmware/src patches/sticks3-baseline/tests/test_inbox_play.cpp -o "$RUNNER_TEMP/inbox-play"
+          "$RUNNER_TEMP/inbox-play"
           g++ -std=c++11 -Wall -Wextra -Werror -I kai-upstream/firmware/src patches/kai-v0.12.0-cjk-display/tests/test_cjk_layout.cpp -o "$RUNNER_TEMP/cjk-layout"
           "$RUNNER_TEMP/cjk-layout"
       - name: Install PlatformIO Core

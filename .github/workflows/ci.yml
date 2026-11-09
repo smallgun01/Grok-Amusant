@@ -168,6 +168,7 @@ jobs:
           relay.tests.test_grok_callback
           relay.tests.test_inbox
           fast_voice.tests.test_contract
+          fast_voice.tests.test_inbox_play
           relay.tests.test_device_protocol
           relay.tests.test_device_tls_psk
           relay.tests.test_callback_listener
@@ -184,6 +185,20 @@ jobs:
           uv run --locked python -m unittest discover -s patches/kai-v0.12.0-wifi-w1.5/tests -p test_provision_wifi.py -v
       - name: Self-host configuration and health regressions
         run: uv run --locked python -m unittest discover -s deploy/selfhost -p "test_*.py" -v
+      - name: Checkout pinned firmware for inbox host regression
+        uses: actions/checkout@v6
+        with:
+          repository: zbruceli/kai
+          ref: 1681fb3c11acd28525d8987bba4b9bf4bc2a288f
+          path: kai-upstream
+          persist-credentials: false
+      - name: Verify inbox firmware patch and button policy
+        run: |
+          git -C kai-upstream apply --check "$GITHUB_WORKSPACE/patches/amusant-sticks3-base-v0.12.0.patch"
+          git -C kai-upstream apply "$GITHUB_WORKSPACE/patches/amusant-sticks3-base-v0.12.0.patch"
+          python patches/sticks3-baseline/tests/check_inbox_wiring.py --firmware-root kai-upstream/firmware
+          g++ -std=c++11 -Wall -Wextra -Werror -I kai-upstream/firmware/src patches/sticks3-baseline/tests/test_inbox_play.cpp -o "$RUNNER_TEMP/inbox-play"
+          "$RUNNER_TEMP/inbox-play"
 
   firmware:
     needs: scope
@@ -218,6 +233,9 @@ jobs:
           python patches/kai-v0.12.0-wifi-w1.5/tests/run_host_tests.py --firmware-root kai-upstream/firmware
           python patches/kai-v0.12.0-wifi-w2b1/tests/run_host_tests.py --firmware-root kai-upstream/firmware --wifi-tests patches/kai-v0.12.0-wifi-w1.5/tests
           python patches/kai-v0.12.0-wifi-w2bqr/tests/check_owner_setup_wiring.py --firmware-root kai-upstream/firmware
+          python patches/sticks3-baseline/tests/check_inbox_wiring.py --firmware-root kai-upstream/firmware
+          g++ -std=c++11 -Wall -Wextra -Werror -I kai-upstream/firmware/src patches/sticks3-baseline/tests/test_inbox_play.cpp -o "$RUNNER_TEMP/inbox-play"
+          "$RUNNER_TEMP/inbox-play"
           g++ -std=c++11 -Wall -Wextra -Werror -I kai-upstream/firmware/src patches/kai-v0.12.0-cjk-display/tests/test_cjk_layout.cpp -o "$RUNNER_TEMP/cjk-layout"
           "$RUNNER_TEMP/cjk-layout"
       - name: Compile-only firmware build with synthetic credentials

@@ -124,6 +124,35 @@ class InboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("speak_now", result)
         self.assertEqual(store.get_inbox(TASK_ID)["delivery_state"], "read")
 
+    async def test_latest_unread_result_remains_visible_while_newer_task_is_running(self):
+        store = self.store()
+        store.admit(request_for(TASK_ID, created=NOW - timedelta(seconds=1)))
+        await AsyncDispatcher(store, FakeExecutor(), now=lambda: NOW).dispatch_available()
+        store.admit(request_for(TASK_ID_2, call_id="call-later-running", created=NOW))
+        claimed = store.claim_due(now=NOW, lease_seconds=30)
+        self.assertEqual([task.task_id for task in claimed], [TASK_ID_2])
+
+        self.assertEqual(
+            store.latest_unread_inbox_speech(client_id=CLIENT),
+            {"task_id": TASK_ID, "speak": RESULT.speak},
+        )
+        self.assertTrue(store.inbox_ready(client_id=CLIENT))
+
+    async def test_latest_unread_result_remains_visible_after_newer_result_was_spoken(self):
+        store = self.store()
+        store.admit(request_for(TASK_ID, created=NOW - timedelta(seconds=1)))
+        await AsyncDispatcher(store, FakeExecutor(), now=lambda: NOW).dispatch_available()
+        store.admit(request_for(TASK_ID_2, call_id="call-later-spoken", created=NOW))
+        await AsyncDispatcher(store, FakeExecutor(), now=lambda: NOW).dispatch_available()
+        self.assertTrue(store.mark_inbox_spoken(client_id=CLIENT, task_id=TASK_ID_2, now=NOW))
+
+        self.assertEqual(
+            store.latest_unread_inbox_speech(client_id=CLIENT),
+            {"task_id": TASK_ID, "speak": RESULT.speak},
+        )
+        self.assertTrue(store.inbox_ready(client_id=CLIENT))
+
+
     async def test_speech_request_stays_read_until_explicit_delivery_confirmation(self):
         store = self.store()
         store.admit(request_for(TASK_ID))
