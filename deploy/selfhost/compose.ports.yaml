@@ -1,4 +1,5 @@
 # Single-host advanced ingress: only device TLS-PSK is published.
+# Host-level protection is required; see docs/device-ingress-safety.md.
 # The callback listener binds its separate private callback_api interface
 # at RELAY_CALLBACK_BIND_IP:8645, reachable from a rootful Linux Docker host
 # by the bridge route. Never expose that HTTP port to the public internet.

@@ -1,4 +1,5 @@
 # LAN-only raw TCP ingress; Relay stays on internal-only networks.
+# See docs/device-ingress-safety.md for limits and source-IP boundaries.
 services:
   relay:
     platform: ${AMUSANT_DOCKER_PLATFORM:?set local Docker platform}
@@ -15,6 +16,8 @@ services:
     restart: unless-stopped
     environment:
       RELAY_BIND_IP: ${RELAY_BIND_IP:?}
+      DEVICE_INGRESS_MAX_CONNECTIONS: ${DEVICE_INGRESS_MAX_CONNECTIONS:-32}
+      DEVICE_INGRESS_FIRST_BYTE_TIMEOUT: ${DEVICE_INGRESS_FIRST_BYTE_TIMEOUT:-10}
     ports:
       - "${HOST_LAN_IP:?set the host LAN IPv4}:443:8443/tcp"
     networks:
