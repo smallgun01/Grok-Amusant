@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import math
+from pathlib import Path
 import ssl
 import struct
 import sys
@@ -168,6 +170,45 @@ class PskWssIntegrationTests(unittest.IsolatedAsyncioTestCase):
             logging.disable(previous_disable)
             loop.set_debug(previous_debug)
             loop.set_exception_handler(previous_handler)
+
+    async def test_bounded_ingress_recovers_then_forwards_psk_bearer_ptt(self):
+        path = Path(__file__).resolve().parents[2] / "deploy/selfhost/device_ingress.py"
+        spec = importlib.util.spec_from_file_location("device_ingress_psk_fixture", path)
+        ingress_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ingress_module)
+        ingress = ingress_module.DeviceIngress("127.0.0.1", max_connections=1, first_byte_timeout=0.5)
+        forwarder = await asyncio.start_server(ingress.accept, "127.0.0.1", 0)
+        ingress_port = forwarder.sockets[0].getsockname()[1]
+        original_connect = asyncio.open_connection
+        async def upstream(host, port):
+            self.assertEqual((host, port), ("127.0.0.1", 8443))
+            return await original_connect("127.0.0.1", self.port)
+        async def wait_slots(count):
+            async def wait():
+                while len(ingress.tasks) != count:
+                    await asyncio.sleep(0.001)
+            await asyncio.wait_for(wait(), 2)
+        try:
+            with patch.object(ingress_module.asyncio, "open_connection", side_effect=upstream):
+                _, occupied = await original_connect("127.0.0.1", ingress_port)
+                await wait_slots(1)
+                refused, rejected_writer = await original_connect("127.0.0.1", ingress_port)
+                self.assertEqual(await asyncio.wait_for(refused.read(1), 1), b"")
+                rejected_writer.close()
+                occupied.close()
+                await occupied.wait_closed()
+                await wait_slots(0)
+                self.url = f"wss://127.0.0.1:{ingress_port}/ws"
+                async with connect(self.url, ssl=make_client_context(IDENTITY, PSK),
+                                   additional_headers={"Authorization": f"Bearer {TOKEN}"}) as websocket:
+                    await asyncio.sleep(0.7)
+                    await asyncio.wait_for(await websocket.ping(), 1)
+                await wait_slots(0)
+                await self.test_valid_psk_bearer_opus_wss_round_trip_and_turn_order()
+        finally:
+            forwarder.close()
+            await forwarder.wait_closed()
+            await ingress.close()
 
     async def test_valid_psk_bearer_opus_wss_round_trip_and_turn_order(self):
         # The Stick's mbedTLS offers the AES ECDHE-PSK suite; force it in this client.
