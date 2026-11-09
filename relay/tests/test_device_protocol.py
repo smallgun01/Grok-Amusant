@@ -49,6 +49,11 @@ class OverlapCodec(FakeCodec):
         return [b"OLD-PACKET"]
 
 
+class ImmediateCodec(FakeCodec):
+    def encode_downlink(self, pcm):
+        return [b"OUT"]
+
+
 class FakeWebSocket:
     def __init__(self, tls=False):
         self.request = SimpleNamespace(path="/ws", headers={})
@@ -210,6 +215,47 @@ class DeviceProtocolAdapterTests(unittest.IsolatedAsyncioTestCase):
         audio_logs = [line for line in captured.output if "event=first_outgoing_audio" in line]
         self.assertEqual(len(audio_logs), 1)
         self.assertIn("turn_id=1", audio_logs[0])
+
+    async def test_inbox_play_turn_syncs_following_ptt_latency(self):
+        raw = FakeWebSocket()
+        adapter = DeviceWebSocketAdapter(raw, hardware_mode=True, codec_factory=ImmediateCodec)
+        await raw.incoming.put(json.dumps({"type": "hello", "codecs": ["opus"]}))
+        await adapter.__anext__()
+
+        await raw.incoming.put(json.dumps({"type": "ptt_start"}))
+        await adapter.__anext__()
+        await adapter.begin_device_turn(1)
+        await raw.incoming.put(json.dumps({"type": "ptt_end"}))
+        await adapter.__anext__()
+        with self.assertLogs("amusant.p2.live_bridge", level="INFO") as first_ptt:
+            await adapter.send(bytes(20))
+        self.assertIn("turn_id=1", first_ptt.output[0])
+        self.assertRegex(first_ptt.output[0], r"release_to_first_audio_ms=\d+")
+
+        inbox_play = json.dumps({"type": "inbox_play"})
+        await raw.incoming.put(inbox_play)
+        self.assertEqual(await adapter.__anext__(), inbox_play)
+        await adapter.begin_device_turn(2)
+        self.assertEqual(adapter._turn_id, 2)
+        self.assertIsNone(adapter._active_output_started_at)
+        self.assertIsNone(adapter._active_output_released_at)
+        with self.assertLogs("amusant.p2.live_bridge", level="INFO") as inbox_audio:
+            await adapter.send(bytes(20))
+        self.assertIn("turn_id=2", inbox_audio.output[0])
+        self.assertIn("ptt_to_first_audio_ms=None", inbox_audio.output[0])
+        self.assertIn("release_to_first_audio_ms=None", inbox_audio.output[0])
+
+        await raw.incoming.put(json.dumps({"type": "ptt_start"}))
+        await adapter.__anext__()
+        await adapter.begin_device_turn(3)
+        await raw.incoming.put(json.dumps({"type": "ptt_end"}))
+        await adapter.__anext__()
+        with self.assertLogs("amusant.p2.live_bridge", level="INFO") as resumed_ptt:
+            await adapter.send(bytes(20))
+        self.assertIn("turn_id=3", resumed_ptt.output[0])
+        self.assertRegex(resumed_ptt.output[0], r"release_to_first_audio_ms=\d+")
+        self.assertEqual(adapter._turn_id, 3)
+
 
     async def test_latency_bookkeeping_stays_constant_space_across_many_turns(self):
         raw = FakeWebSocket()

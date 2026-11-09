@@ -154,6 +154,13 @@ class GrokCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(frames[-1], {"type": "inbox", "count": 1})
         self.assertFalse(self.store.inbox_ready(client_id="other-owner"))
         self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "pending")
+        self.assertIsNone(self.store.latest_unread_inbox_speech(client_id="other-owner"))
+        speech = self.store.latest_unread_inbox_speech(client_id=CLIENT)
+        self.assertEqual(speech["task_id"], self.task_id)
+        self.assertTrue(speech["speak"].endswith("The fixed Grok fixture answer."))
+        self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "pending")
+        reopened = SQLiteTaskStore(database_path=self.database, max_pending_tasks=8)
+        self.assertEqual(reopened.latest_unread_inbox_speech(client_id=CLIENT), speech)
         status, receipt = await _asgi_call(app, _report(self.task_id, outcome="not_completed"), token=token)
         self.assertEqual(status, 200)
         self.assertTrue(receipt["duplicate"])
@@ -173,9 +180,52 @@ class GrokCallbackTests(unittest.IsolatedAsyncioTestCase):
         await hub._sessions[key]["task"]
         self.assertEqual(frames[-1]["count"], 0)
         self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "read")
+        self.assertIsNone(self.store.latest_unread_inbox_speech(client_id=CLIENT))
         self.assertTrue(await router.mark_spoken(self.task_id))
         self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "spoken")
         hub.unregister(key)
+
+    async def test_button_readback_of_unfinished_report_updates_badge_after_audio(self):
+        from fast_voice.tests.test_live_bridge import FakeProvider, TOKEN
+        from relay.live_bridge import InboxBadgeSessions, make_handler
+        from websockets.asyncio.client import connect
+        from websockets.asyncio.server import serve
+
+        token = "fake-token"
+        self.store.begin_grok_submission(
+            self.task_id, token_sha256=hashlib.sha256(token.encode()).hexdigest(),
+            token_expires_at=self.now + timedelta(minutes=1),
+            callback_deadline_at=self.now + timedelta(seconds=30), now=self.now)
+        status, _ = await _asgi_call(self.callback_app, _report(self.task_id, outcome="not_completed"), token=token)
+        self.assertEqual(status, 200)
+        hub = InboxBadgeSessions()
+        hub.store = self.store
+        router = SlowPathToolRouter(store=self.store, client_id=CLIENT, conversation_id="conversation-1",
+            backend_id="grok_bot", default_task_kind="agent", max_task_ttl_seconds=600,
+            acceptance_timeout_seconds=1, now=lambda: self.now, executor_kind="grok_callback",
+            on_inbox_change=hub.notify)
+        speech = FakeProvider(auto_complete=False)
+        server = await serve(make_handler(TOKEN, lambda: FakeProvider(),
+            slow_path_tool_handler=router, spoken_provider_factory=lambda: speech,
+            authenticated_client_id=CLIENT, inbox_badges=hub), "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        ws = await connect(f"ws://127.0.0.1:{port}/ws", additional_headers={"Authorization": f"Bearer {TOKEN}"})
+        try:
+            await ws.send(json.dumps({"type": "hello"}))
+            self.assertEqual(json.loads(await asyncio.wait_for(ws.recv(), 2)), {"type": "inbox", "count": 1})
+            await ws.send(json.dumps({"type": "inbox_play"}))
+            await asyncio.wait_for(speech.injected_event.wait(), 2)
+            self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "pending")
+            await speech.emit_response()
+            while True:
+                frame = await asyncio.wait_for(ws.recv(), 2)
+                if not isinstance(frame, bytes) and json.loads(frame) == {"type": "inbox", "count": 0}:
+                    break
+            self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "spoken")
+        finally:
+            await ws.close()
+            server.close()
+            await server.wait_closed()
 
     async def test_timed_out_callback_still_notifies_after_durable_commit(self):
         import threading
@@ -307,7 +357,10 @@ class GrokCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.get_inbox(newer)["delivery_state"], "read")
         self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "pending")
         await hub._sessions[key]["task"]
-        self.assertEqual(frames[-1], {"type": "inbox", "count": 0})
+        self.assertEqual(frames[-1], {"type": "inbox", "count": 1})
+        self.assertEqual(
+            self.store.latest_unread_inbox_speech(client_id=CLIENT)["task_id"], self.task_id,
+        )
         hub.unregister(key)
 
     async def _latest_task_admission_and_result(self, outcome):
@@ -336,10 +389,13 @@ class GrokCallbackTests(unittest.IsolatedAsyncioTestCase):
                                              arguments={"task": "Synthetic task"}), 1)
         self.assertEqual(receipt["status"], "accepted")
         await hub._sessions[key]["task"]
-        self.assertEqual(frames[-1], 0)
+        self.assertEqual(frames[-1], 1)
         self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "pending")
         self.store.claim_due(now=now, lease_seconds=30)
-        self.assertFalse(self.store.inbox_ready(client_id=CLIENT))
+        self.assertTrue(self.store.inbox_ready(client_id=CLIENT))
+        self.assertEqual(
+            self.store.latest_unread_inbox_speech(client_id=CLIENT)["task_id"], self.task_id,
+        )
         self.store.begin_grok_submission(
             newer, token_sha256=hashlib.sha256(token.encode()).hexdigest(),
             token_expires_at=now + timedelta(minutes=5),
@@ -352,8 +408,9 @@ class GrokCallbackTests(unittest.IsolatedAsyncioTestCase):
         result = await router(ToolCallEvent(name=INBOX_TOOL_NAME, call_id="latest", arguments={}), 2)
         self.assertEqual(result["task_id"], newer)
         await hub._sessions[key]["task"]
-        self.assertEqual(frames[-1], 0)
+        self.assertEqual(frames[-1], 1)
         self.assertEqual(self.store.get_inbox(self.task_id)["delivery_state"], "pending")
+        self.assertEqual(self.store.latest_unread_inbox_speech(client_id=CLIENT)["task_id"], self.task_id)
         hub.unregister(key)
 
     async def test_latest_admission_and_completed_result_badge(self):

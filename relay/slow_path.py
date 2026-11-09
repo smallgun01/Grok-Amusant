@@ -340,19 +340,40 @@ class SlowPathToolRouter:
         marker = getattr(self._store, "mark_inbox_spoken", None)
         if not callable(marker):
             return False
-        try:
-            return bool(await asyncio.wait_for(
-                asyncio.to_thread(
-                    marker,
-                    client_id=self._client_id,
-                    task_id=task_id,
-                    now=self._now(),
-                ),
-                timeout=self._timeout,
+        async def perform_mark() -> bool:
+            confirmed = bool(await asyncio.to_thread(
+                marker, client_id=self._client_id, task_id=task_id, now=self._now(),
             ))
+            if confirmed and self._on_inbox_change is not None:
+                try:
+                    self._on_inbox_change(self._client_id)
+                except Exception:
+                    pass
+            return confirmed
+
+        task = asyncio.create_task(perform_mark())
+        # A timed-out thread can still commit; reconcile when it eventually does.
+        def observe_mark(done):
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(observe_mark)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=self._timeout)
         except Exception:
             # Unknown writes stay retryable; never claim an unconfirmed transition.
             return False
+
+    async def latest_unread_speech(self) -> Mapping[str, JSONValue] | None:
+        """Read the current owner's unread result without acknowledging it."""
+        lookup = getattr(self._store, "latest_unread_inbox_speech", None)
+        if not callable(lookup):
+            return None
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(lookup, client_id=self._client_id), self._timeout
+            )
+        except Exception:
+            return None
 
     async def _lookup(self, event: ToolCallEvent) -> Mapping[str, JSONValue]:
         arguments = event.arguments

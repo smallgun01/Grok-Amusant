@@ -596,6 +596,34 @@ index 3b20006..f6ef4b1 100644
  void setBattery(int percent);
  void setInbox(int count);                // badge: updates waiting from the background brain
  
+diff --git a/firmware/src/inbox_play.h b/firmware/src/inbox_play.h
+new file mode 100644
+index 0000000..e58e417
+--- /dev/null
++++ b/firmware/src/inbox_play.h
+@@ -0,0 +1,22 @@
++#pragma once
++
++namespace inbox_play {
++struct State {
++  bool fresh = false;
++  bool unread = false;
++  bool pending = false;
++  bool press_eligible = false;
++  bool suppress_wake = false;
++
++  void disconnect() { fresh = unread = pending = press_eligible = false; }
++  void sync(int count) { fresh = true; unread = count == 1; }
++  bool suppress(bool pressed) {
++    if (!suppress_wake) return false;
++    if (!pressed) suppress_wake = false;
++    return true;
++  }
++  bool eligible(bool connected, bool idle, bool provisioning) const {
++    return connected && idle && !provisioning && fresh && unread && !pending && !suppress_wake;
++  }
++};
++}
 diff --git a/firmware/src/jellii_text_utf8.h b/firmware/src/jellii_text_utf8.h
 new file mode 100644
 index 0000000..6e503eb
@@ -710,10 +738,10 @@ index 0000000..6e503eb
 +}  // namespace jellii_text
 +
 diff --git a/firmware/src/main.cpp b/firmware/src/main.cpp
-index 45e4b96..9a0b071 100644
+index 45e4b96..83d3773 100644
 --- a/firmware/src/main.cpp
 +++ b/firmware/src/main.cpp
-@@ -9,16 +9,31 @@
+@@ -9,16 +9,32 @@
  #include <WebSocketsClient.h>
  #include <WiFi.h>
  #include <driver/rtc_io.h>
@@ -727,6 +755,7 @@ index 45e4b96..9a0b071 100644
  
  #include "audio.h"
  #include "face.h"
++#include "inbox_play.h"
 +#include "power_policy.h"
  #include "secrets.h"
 +
@@ -745,7 +774,7 @@ index 45e4b96..9a0b071 100644
  
  // libopus (fixed point) keeps sizeable frames on the stack; Arduino's default 8 KB loop stack is too tight.
  SET_LOOP_TASK_STACK_SIZE(16 * 1024);
-@@ -35,6 +50,7 @@ static constexpr int DECODE_PER_LOOP = 4;            // ~16 ms of decoding per l
+@@ -35,6 +51,7 @@ static constexpr int DECODE_PER_LOOP = 4;            // ~16 ms of decoding per l
  // answer, so the tail is short, the radio naps and the CPU slows down whenever nothing is happening,
  // and deep sleep powers the screen/audio rail off. On USB Kai never deep-sleeps, so it stays instant.
  static constexpr uint8_t BRIGHTNESS_AWAKE = 90;
@@ -753,7 +782,7 @@ index 45e4b96..9a0b071 100644
  static constexpr uint8_t BRIGHTNESS_DIM = 15;
  static constexpr uint32_t DIM_AFTER_MS = 15000;
  static constexpr uint32_t DEEP_SLEEP_AFTER_MS = 45000;      // on battery
-@@ -76,6 +92,20 @@ RTC_DATA_ATTR static uint8_t cachedBssid[6];
+@@ -76,6 +93,20 @@ RTC_DATA_ATTR static uint8_t cachedBssid[6];
  RTC_DATA_ATTR static int32_t cachedChannel = 0;
  RTC_DATA_ATTR static uint32_t cachedRelayIp = 0;
  RTC_DATA_ATTR static uint8_t untouchedTimerWakes = 0;  // timer wakes in a row with no button press
@@ -774,7 +803,15 @@ index 45e4b96..9a0b071 100644
  #ifdef KAI_TELEMETRY
  RTC_DATA_ATTR static int64_t sleptAtUs = 0;  // RTC wall clock keeps running through deep sleep
  RTC_DATA_ATTR static int16_t sleptMv = 0;
-@@ -162,6 +192,16 @@ static void backlight(uint8_t level) {
+@@ -87,6 +118,7 @@ static WebSocketsClient ws;
+ static Mode mode = Mode::Offline;
+ static bool wsStarted = false;
+ static bool wsConnected = false;
++static inbox_play::State inboxPlay;
+ static bool everConnected = false;
+ static bool wokeFromSleep = false;
+ static bool wokeByTimer = false;   // this boot came from the RTC timer, not a button
+@@ -162,6 +194,16 @@ static void backlight(uint8_t level) {
    M5.Display.setBrightness(level);
  }
  
@@ -791,7 +828,7 @@ index 45e4b96..9a0b071 100644
  #ifdef KAI_TELEMETRY
  static int64_t rtcNowUs() {
    timeval tv;
-@@ -243,16 +283,16 @@ static void powerSave(uint32_t now) {
+@@ -243,16 +285,16 @@ static void powerSave(uint32_t now) {
      if (mode == Mode::Idle) face::setExpr(Expr::Sleeping);
      dimmed = true;
    }
@@ -813,7 +850,52 @@ index 45e4b96..9a0b071 100644
    }
  }
  
-@@ -510,14 +550,17 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
+@@ -432,15 +474,25 @@ static void onRelayText(const uint8_t* payload, size_t length) {
+   } else if (!strcmp(type, "nudge")) {
+     if (!hushed && mode != Mode::Listening) audio::chime();  // Kai is about to say something unasked
+   } else if (!strcmp(type, "inbox")) {
+-    face::setInbox(doc["count"] | 0);
++    if (doc["count"].is<int>() && (doc["count"].as<int>() == 0 || doc["count"].as<int>() == 1)) {
++      const int count = doc["count"].as<int>();
++      inboxPlay.sync(count);
++      face::setInbox(count);
++    } else {
++      inboxPlay.fresh = false;
++      inboxPlay.unread = false;
++      face::setInbox(0);
++    }
+   } else if (!strcmp(type, "interrupted")) {
+     audio::clearPlayback();
+     voice::dropQueued();
+   } else if (!strcmp(type, "turn_complete")) {
++    inboxPlay.pending = false;
+     turnComplete = true;
+     turnCompleteAt = millis();
+   } else if (!strcmp(type, "state")) {
+     // "idle" = the relay dropped the turn (a tap, or an error it already sent a card for).
++    if (!strcmp(doc["state"] | "", "idle")) inboxPlay.pending = false;
+     if (!strcmp(doc["state"] | "", "idle") && mode == Mode::Thinking) {
+       setMode(face::hasReply() ? Mode::Reply : Mode::Idle);
+     }
+@@ -450,6 +502,8 @@ static void onRelayText(const uint8_t* payload, size_t length) {
+ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
+   switch (type) {
+     case WStype_CONNECTED: {
++      inboxPlay.disconnect();
++      face::setInbox(0);
+       wsConnected = true;
+       const bool firstConnect = !everConnected;  // the wake reason belongs to this boot's first hello
+       everConnected = true;
+@@ -481,6 +535,8 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
+       break;
+     }
+     case WStype_DISCONNECTED:
++      inboxPlay.disconnect();
++      face::setInbox(0);
+       if (!wsConnected) break;  // a failed connection attempt; keep retrying quietly
+       log_w("relay disconnected");
+       wsConnected = false;
+@@ -510,14 +566,17 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
  // ---- connectivity ----------------------------------------------------------
  
  static void startWifi() {
@@ -833,7 +915,7 @@ index 45e4b96..9a0b071 100644
    }
  }
  
-@@ -542,14 +585,9 @@ static void startRelayConnection() {
+@@ -542,14 +601,9 @@ static void startRelayConnection() {
        host = ip.toString();
      }
    }
@@ -848,7 +930,7 @@ index 45e4b96..9a0b071 100644
    ws.setExtraHeaders("Authorization: Bearer " KAI_DEVICE_TOKEN);
    ws.onEvent(onWsEvent);
    ws.setReconnectInterval(wokeFromSleep ? 1000 : 3000);
-@@ -566,15 +604,17 @@ static void startRelayConnection() {
+@@ -566,15 +620,17 @@ static void startRelayConnection() {
  }
  
  static void maintainConnection() {
@@ -868,7 +950,7 @@ index 45e4b96..9a0b071 100644
      }
      if (!earlyTalk) {
        if (mode == Mode::Listening) audio::stopMic(discardMic);
-@@ -598,20 +638,289 @@ static void maintainConnection() {
+@@ -598,20 +654,289 @@ static void maintainConnection() {
      ws.disconnect();
      wsStarted = false;
      cachedRelayIp = 0;
@@ -1163,7 +1245,7 @@ index 45e4b96..9a0b071 100644
    c.lines[c.count++] = String("Relay ") + (wsConnected ? "connected" : "offline");
    c.lines[c.count++] = String("Battery ") + String(M5.Power.getBatteryLevel()) + "%" +
                         (audio::onUsbPower() ? " on USB" : "");
-@@ -620,13 +929,36 @@ static void showStatus() {
+@@ -620,16 +945,44 @@ static void showStatus() {
    showCard(c);
  }
  
@@ -1188,11 +1270,15 @@ index 45e4b96..9a0b071 100644
 +  bool setupStatusShown = false;
    // With the screen off, the side button only wakes Kai (so it doesn't also scroll or open status).
    if (screenOff && M5.BtnB.wasPressed()) {
++    inboxPlay.suppress_wake = true;
      wake();
      return;
    }
-   if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed()) wake();
-+  if (M5.BtnB.wasPressed()) {
+-  if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed()) wake();
++  const bool suppressB = inboxPlay.suppress(M5.BtnB.isPressed());
++  if (M5.BtnA.wasPressed() || (!suppressB && M5.BtnB.wasPressed())) wake();
++  if (!suppressB && M5.BtnB.wasPressed()) {
++    inboxPlay.press_eligible = inboxPlay.eligible(wsConnected, mode == Mode::Idle, wifi_ble_provisioning::active());
 +    setupGestureTracking = wifiSetupGestureAllowed();
 +    setupGestureStartedAt = millis();
 +    setupGestureHintShown = false;
@@ -1200,7 +1286,12 @@ index 45e4b96..9a0b071 100644
  
    // Front: push to talk (also barges in while Kai is talking).
    if (M5.BtnA.wasPressed() && wsConnected && mode != Mode::Listening) {
-@@ -645,13 +977,37 @@ static void handleButtons() {
++    inboxPlay.pending = false;
++    inboxPlay.press_eligible = false;
+     beginTurn();
+     audio::startMic();
+     sendType("ptt_start");
+@@ -645,22 +998,53 @@ static void handleButtons() {
      setMode(Mode::Thinking);
    }
  
@@ -1229,7 +1320,8 @@ index 45e4b96..9a0b071 100644
 +  }
 +
    // Side: click = scroll, hold = hush while talking, otherwise status.
-   if (M5.BtnB.wasHold()) {
+-  if (M5.BtnB.wasHold()) {
++  if (!suppressB && M5.BtnB.wasHold()) {
      if (mode == Mode::Reply && !audio::playbackIdle()) {
        audio::clearPlayback();
        voice::dropQueued();
@@ -1238,8 +1330,26 @@ index 45e4b96..9a0b071 100644
 +    } else if (mode != Mode::Listening && !setupGestureTracking && !setupStatusShown) {
        showStatus();
      }
-   } else if (M5.BtnB.wasClicked()) {
-@@ -671,6 +1027,10 @@ void setup() {
+-  } else if (M5.BtnB.wasClicked()) {
+-    if (mode == Mode::Reply) {
++  } else if (!suppressB && M5.BtnB.wasClicked()) {
++    if (inboxPlay.press_eligible &&
++        inboxPlay.eligible(wsConnected, mode == Mode::Idle, wifi_ble_provisioning::active())) {
++      inboxPlay.pending = true;
++      beginTurn();
++      sendType("inbox_play");
++      setMode(Mode::Thinking);
++    } else if (mode == Mode::Reply) {
+       face::scrollReply();
+       lastReplyActivity = millis();
+     } else if (mode == Mode::Idle && face::hasReply()) {
+       setMode(Mode::Reply);  // bring back the last answer
+     }
++    inboxPlay.press_eligible = false;
+   }
+ }
+ 
+@@ -671,6 +1055,10 @@ void setup() {
    cfg.fallback_board = m5::board_t::board_M5StickS3;
    M5.begin(cfg);
    Serial.begin(115200);
@@ -1250,7 +1360,17 @@ index 45e4b96..9a0b071 100644
  
    M5.Power.setExtOutput(false);  // 5V boost for Grove/Hat/IR: unused, and it was left running
    M5.Imu.sleep();                // not used yet
-@@ -688,25 +1048,66 @@ void setup() {
+@@ -681,32 +1069,75 @@ void setup() {
+   bool wokeToTalk = false;
+   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+     wokeFromSleep = true;
+-    wokeToTalk = esp_sleep_get_ext1_wakeup_status() & (1ULL << PIN_BTN_A);
++    const uint64_t wakePins = esp_sleep_get_ext1_wakeup_status();
++    wokeToTalk = wakePins & (1ULL << PIN_BTN_A);
++    inboxPlay.suppress_wake = wakePins & (1ULL << PIN_BTN_B);
+     untouchedTimerWakes = 0;
+   } else if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
+     wokeFromSleep = wokeByTimer = true;
      if (untouchedTimerWakes < 255) untouchedTimerWakes++;
    }
  
@@ -1322,6 +1442,14 @@ index 45e4b96..9a0b071 100644
    maintainConnection();
    if (wsStarted) ws.loop();
    if (connectBoost && (wsConnected || millis() - wsBeganAt > CONNECT_BOOST_MS)) {
+@@ -732,6 +1163,7 @@ void loop() {
+       if (turnComplete && now - turnCompleteAt > EMPTY_TURN_GRACE_MS) {
+         setMode(Mode::Idle);  // nothing came back
+       } else if (now - modeSince > THINKING_TIMEOUT_MS) {
++        inboxPlay.pending = false;
+         Card c;
+         c.title = "No answer";
+         c.lines[c.count++] = "The relay went quiet.";
 diff --git a/firmware/src/power_policy.h b/firmware/src/power_policy.h
 new file mode 100644
 index 0000000..ebaba25

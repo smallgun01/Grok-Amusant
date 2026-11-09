@@ -85,9 +85,12 @@ class DeviceWebSocketAdapter:
         if not isinstance(turn_id, int) or turn_id < 1:
             raise DeviceProtocolError("invalid_bridge_turn_id")
         async with self._codec_lock:
+            if turn_id < self._active_output_turn_id:
+                return
+            self._turn_id = max(self._turn_id, turn_id)
             self._active_output_turn_id = turn_id
-            self._active_output_started_at = self._ptt_started_at
-            self._active_output_released_at = self._ptt_released_at
+            self._active_output_started_at = self._ptt_started_at if self._ptt_open else None
+            self._active_output_released_at = self._ptt_released_at if self._ptt_open else None
             self._first_wire_audio_logged = False
             if self._codec is not None:
                 self._codec.discard_downlink()
