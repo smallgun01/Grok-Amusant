@@ -33,6 +33,11 @@ Hold the front **A** button to talk and release to send. The side **B** button w
 
 **First-time builder? Follow the [Local-first Quick Start](docs/local-first.md): Linux PC + StickS3 + Gemini API key → Docker → Flash → BLE Wi-Fi → first spoken FAST answer.** No domain, public inbound ports or cloud server required. After FAST, add Grok Callback using a temporary HTTPS tunnel or follow the [ARM64 / OCI advanced deployment](docs/build-your-own-jellii.md).
 
+
+**Owner-reported physical validation (2026-11-10):** An existing legacy OCI deployment used Tailscale Funnel raw TCP on port 10000 as its primary device ingress (an optional path for other deployments); FAST across Wi-Fi networks, FAST Google Search, Grok dispatch, Callback, Inbox and Button B readback passed. A persistent host forwarder carried device traffic to the existing private TLS-PSK Relay ingress. The Owner enabled Gemini Google Search in that deployment; its Relay image is a legacy image, not evidence that this public repository's current `main` was deployed. Funnel cold start and closure of direct public TCP 443 were not verified. FAST/SLOW intent routing remains imperfect.
+
+Grok Bot does not accept an Owner approval embedded in a webhook payload as authorization to create a Routine; approve such actions separately in a trusted Grok interface. Prompts do not bypass this boundary. See [device ingress boundaries](docs/device-ingress-safety.md).
+
 Amusant has already passed **owner-operated local StickS3/Gemini FAST physical E2E** and **OCI StickS3/Gemini/Grok/Callback/Inbox physical E2E**. The public setup instructions have **not yet been independently clean-room reproduced**; these are separate claims.
 
 ## Jellii screens
