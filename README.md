@@ -36,7 +36,7 @@ Hold the front **A** button to talk and release to send. The side **B** button w
 
 **Owner-reported physical validation (2026-11-10):** An existing legacy OCI deployment used Tailscale Funnel raw TCP on port 10000 as its primary device ingress (an optional path for other deployments); FAST across Wi-Fi networks, FAST Google Search, Grok dispatch, Callback, Inbox and Button B readback passed. A persistent host forwarder carried device traffic to the existing private TLS-PSK Relay ingress. The Owner enabled Gemini Google Search in that deployment; its Relay image is a legacy image, not evidence that this public repository's current `main` was deployed. Funnel cold start and closure of direct public TCP 443 were not verified. FAST/SLOW intent routing remains imperfect.
 
-Grok Bot does not accept an Owner approval embedded in a webhook payload as authorization to create a Routine; approve such actions separately in a trusted Grok interface. Prompts do not bypass this boundary. See [device ingress boundaries](docs/device-ingress-safety.md).
+In the Owner's 2026-11-10 test environment, Grok Bot did not accept an Owner approval embedded in a webhook payload as authorization to create a Routine. In that environment, approve such actions separately in a trusted Grok interface; prompts did not bypass this boundary. See [device ingress boundaries](docs/device-ingress-safety.md).
 
 Amusant has already passed **owner-operated local StickS3/Gemini FAST physical E2E** and **OCI StickS3/Gemini/Grok/Callback/Inbox physical E2E**. The public setup instructions have **not yet been independently clean-room reproduced**; these are separate claims.
 
