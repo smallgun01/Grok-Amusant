@@ -8,6 +8,12 @@
 
 For LAN, `DEVICE_INGRESS_MAX_CONNECTIONS` defaults to 32 (range 1–1024), and `DEVICE_INGRESS_FIRST_BYTE_TIMEOUT` defaults to 10 seconds (range 1–300). Set them in the private Compose environment if needed. A full budget closes additional connections immediately; slots return when a connection ends. The deadline applies only until the first client byte, not throughout an authenticated voice session. A client can send a byte without authenticating; Relay's existing handshake timeout still applies after forwarding begins. The forwarder cannot identify authenticated sessions, rate-limit reliably by source, or prevent kernel accept-queue exhaustion.
 
+## Owner-validated optional Funnel path
+
+On 2026-11-10 the Owner reported a working legacy OCI route: Funnel **raw TCP/10000** → persistent host forwarder → existing private host ingress TCP/443 → Relay TLS-PSK/WSS TCP/8443. The forwarding hops must preserve the end-to-end TLS-PSK stream; a TLS-terminating HTTPS proxy is a different topology. Callback remains separate. FAST across Wi-Fi networks and the Owner's FAST/SLOW path passed; this does not prove Funnel cold-start recovery, closure of direct public TCP 443, or deployment of the public source. Host firewall and ingress protections remain operator-owned. See the [Tailscale Funnel documentation](https://tailscale.com/docs/reference/tailscale-cli/funnel) for supported modes.
+
+This is an optional ingress architecture reference, not an automatic installer or a replacement for the existing self-hosted guides. Configure private host addresses and credentials outside the repository.
+
 ## Sanitized OCI architecture reference
 
 The established legacy route is host TCP 443 → socket-activated `systemd-socket-proxyd` → private Relay TCP 8443. A minimal reference for a future separately approved deployment is below; placeholders deliberately are not usable configuration. Use matching socket/service unit names and an actual private Relay address selected by the operator. Do not publish the callback listener or egress proxy.

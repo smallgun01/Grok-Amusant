@@ -33,6 +33,11 @@ Jellii 使用 **M5Stack M5StickS3（SKU K150）**，配備 ESP32-S3、8 MB Flash
 
 **第一次自己做 Jellii？請走 [Local-first 快速建置](docs/local-first.zh-TW.md)：Linux 電腦＋StickS3＋Gemini API Key → Docker → 刷機 → BLE Wi-Fi → 第一次 FAST 開口說話。** 不需要先準備網域、公開 Port 或雲端主機。FAST 成功後再加 Grok Callback，或依照[進階 ARM64／OCI 部署](docs/build-your-own-jellii.zh-TW.md)搬到雲端。
 
+
+**Owner 回報的實機驗證（2026-11-10）：**既有舊版 OCI 部署以 Tailscale Funnel raw TCP 10000 作為該部署的主要裝置入口（其他部署可選擇使用）；FAST 跨 Wi-Fi、FAST Google Search、Grok 派送、Callback、Inbox 與 B 鍵朗讀通過。主機上的常駐轉送器將裝置流量送至既有私有 TLS-PSK Relay 入口。Owner 已在該部署啟用 Gemini Google Search；Relay 使用的是舊版映像，不能據此宣稱本公開 repo 的目前 `main` 已部署。Funnel 冷啟動及直接公網 TCP 443 是否關閉均未驗證；FAST／SLOW 自然語言路由仍可能判斷錯誤。
+
+在 Owner 的 2026-11-10 實測環境中，Grok Bot 未接受 Webhook Payload 內的 Owner 核准作為新增 Routine 的授權；該環境需在可信任的 Grok 互動介面另行核准，無法用 Prompt 繞過。詳見[裝置入口安全邊界](docs/device-ingress-safety.md)。
+
 Amusant **已通過 Owner 本地 StickS3／Gemini FAST 實機 E2E**，以及 **OCI StickS3／Gemini／Grok／Callback／Inbox 實機 E2E**。但新的公開安裝教學**尚未由陌生使用者從乾淨環境獨立重現**，兩者不可混淆。
 
 ## Jellii 畫面
