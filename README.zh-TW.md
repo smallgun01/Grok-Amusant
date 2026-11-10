@@ -6,16 +6,7 @@ Amusant 是一個開源 AI 語音夥伴專案，而 Jellii（潔莉）則是基�
 
 Jellii 是實驗性的按鍵通話夥伴，透過自架 Relay 連接 StickS3、Gemini Live 語音與 Grok Bot 委派任務。
 
-```mermaid
-flowchart LR
-    device["StickS3 裝置"] <-->|"TLS-PSK / WSS"| relay["Relay"]
-    relay <-->|"FAST 即時語音"| gemini["Gemini Live"]
-    relay <-->|"任務與結果"| store[("SQLite / Inbox")]
-    relay -->|"SLOW 委派任務"| proxy["Egress Proxy"]
-    proxy --> routine["Grok Bot Routine"]
-    routine -->|"Callback"| ingress["獨立 callback ingress"]
-    ingress --> relay
-```
+![系統架構](docs/images/image.webp)
 
 Callback ingress 需另外設定；Compose 範例沒有公開該連接埠。支援的慢速執行器為 `grok_callback`；設定缺失或不支援時會 fail-closed。本專案為實驗性 Public Alpha 原始碼，尚未核准正式生產部署。
 
