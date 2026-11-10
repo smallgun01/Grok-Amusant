@@ -6,16 +6,7 @@ Amusant is an open-source AI voice companion project. Jellii is the companion bu
 
 Jellii is an experimental push-to-talk companion connecting a StickS3 device to Gemini Live voice and delegated Grok Bot tasks through a self-hosted relay.
 
-```mermaid
-flowchart LR
-    device["StickS3 device"] <-->|"TLS-PSK / WSS"| relay["Relay"]
-    relay <-->|"FAST voice"| gemini["Gemini Live"]
-    relay <-->|"Tasks and results"| store[("SQLite / Inbox")]
-    relay -->|"SLOW task"| proxy["Egress proxy"]
-    proxy --> routine["Grok Bot Routine"]
-    routine -->|"Callback"| ingress["Separate callback ingress"]
-    ingress --> relay
-```
+![Workflow](docs/images/image.png)
 
 The callback ingress is a separately configured boundary; the sample Compose file does not publish it. The supported slow executor is `grok_callback`; missing or unsupported profiles fail closed. This is experimental Public Alpha source, not an approved production deployment.
 
